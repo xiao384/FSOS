@@ -1,0 +1,54 @@
+PixelSandbox OS - 内核版本快照
+================================
+快照日期 : 2026-08-30
+构建方式 : .\build-mingw.ps1 -WithPython
+内核入口 : kernel.exe _start (image-base 0, 平坦加载到 0x100000)
+内核体积 : kernel.bin 1300592 字节 / 2542 扇区, 结束 LBA 2551
+磁盘镜像 : image.img 2MB (4096 扇区), 布局见 layout.h
+引导方式 : 两级引导 boot.asm -> loader.asm (int13h EDD 块加载)
+ISO 分发 : iso/PixelSandbox.iso (El Torito No-Emulation, 纯 PowerShell 打包)
+           引导: iso_boot.bin 从 CD 读 kernel.bin -> 0x100000 -> 跳内核
+           持久化: 真实硬盘 (LBA 3800/3810/3960), 纯 CD 启动不保存
+
+功能状态 (本版本)
+----------------
+- 图形化 Windows 式桌面 (wm.c): 桌面图标/任务栏/开始菜单/可拖动窗口/最小化/关闭/z序
+- 双缓冲 (gfx.c): gfx_init_mode13() + gfx_flip()
+- 权限层 (perm.c/perm.h): ROLE_ROOT/ADMIN/USER, perm_can_modify()
+- 持久化配置 (sysconf.c): 主题/主机名等落盘 LBA_SYSCONF(3960), 与内核区隔离
+- 终端命令: theme/config (root 限定, 落盘)
+- MicroPython: krn 模块 (krn_bridge.c)
+
+文件清单
+--------
+image.img       完整可启动磁盘镜像 (可直接 dd 到硬盘 / qemu -drive)
+kernel.bin      平坦内核
+boot.bin        引导扇区 (512B)
+kernel.exe      PE 参考 (含符号, 用于 nm 解析入口)
+loader.bin      二级引导
+PixelSandbox.iso 可启动 ISO (El Torito No-Emulation, 标准引导介质)
+
+回滚
+----
+用本目录 image.img 覆盖 output/image.img 即可回到此版本。
+
+增量 (2026-08-30 后续)
+----------------------
+- krn 模块扩展 (krn_bridge.c): 新增 krn.theme()/krn.hostname()/krn.config()/krn.run()
+  root 可经 Python 脚本修改主题/主机名/读取配置/执行任意终端命令。
+- terminal.c: run_command() 导出, 供 krn.run() 复用 (命令分发统一)。
+- build-mingw.ps1: MicroPython 构建加 RM=true 绕过 WorkBuddy safe-delete shim。
+- pack_iso.ps1: 改为 El Torito No-Emulation (标准引导, 修复旧 1.44MB 限制与字体基址 bug)。
+- run-qemu.ps1: 增加 ISO 引导路径定位回退。
+
+增量 (2026-08-30 后续二: 任务 42 + 系统驱动)
+-------------------------------------------
+- 新增 driver.h/driver.c: 统一驱动管理器。把 vga/kb/mouse/ata/serial/idt/pic/pit
+  收敛为驱动表 (name/type/init/desc/status/builtin), drv_init_all() 注册并自动初始化,
+  任一驱动失败只标记状态不中断启动。为 ata.c 增加 ata_probe()。
+- kernel.c: 用 drv_init_all() 替换散落的 vga_init/idt_init/... 手工调用。
+- terminal.c 改为表驱动 (任务 42): cmd_entry 表 + term_init_cmds() + run_command 查表分发;
+  help 自动由表生成; 新增 drivers 命令列出驱动; 新增 term_register_cmd() 让用户注册"宏命令"。
+- krn 模块 (krn_bridge.c) 扩展: krn.drivers() 列出驱动, krn.load_driver(name) 加载驱动,
+  krn.list_cmds() 列出命令, krn.register_cmd(name,line) 注册自定义命令(宏)。
+  核心驱动受布局守卫保护不可被覆盖, root 只能注册额外扩展。

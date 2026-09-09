@@ -1,0 +1,50 @@
+# ============================================================
+# FSOS build artifacts & large binary outputs (DO NOT COMMIT)
+# ============================================================
+output/
+build/
+build-mingw/
+build_run.log
+
+# 4GB disk images / VMware disks / ISO / kernel test bins
+*.img
+*.vmdk
+*.iso
+*.bin
+_t_*
+fsos_*.png
+idt_dump.txt
+nm_idt_*.txt
+gdb*.gdb
+
+# log / runtime dumps
+*.log
+*.scoreboard
+*.lck
+
+# ============================================================
+# First-party tree: ignore only backup / debug / generated dirs
+# ============================================================
+first_source_backup_*/
+first/build/
+first/build-mingw/
+first/output/
+first/python_terminal/
+first/_debug_archive/
+
+# ============================================================
+# IDE / agent / tooling data
+# ============================================================
+.idea/
+.vscode/
+.workbuddy/
+.arts/
+.codebuddy/
+.merkle-snapshot.json
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Generated ISO directory
+iso/
