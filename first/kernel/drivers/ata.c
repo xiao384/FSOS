@@ -41,6 +41,10 @@ static void ata_select(uint32_t lba) {
 }
 
 int ata_read_sectors(uint32_t lba, uint8_t count, void* buf) {
+    if (count == 0) return -1;
+    // 越界保护: lba+count 超过磁盘容量(已钳到 LBA28 上限)时拒绝,
+    // 避免读到回绕扇区或越界访问。
+    if ((uint64_t)lba + count > ata_total_sectors()) return -1;
     uint8_t* p = (uint8_t*)buf;
     for (int i = 0; i < count; i++) {
         ata_select(lba + i);
@@ -55,6 +59,10 @@ int ata_read_sectors(uint32_t lba, uint8_t count, void* buf) {
 }
 
 int ata_write_sectors(uint32_t lba, uint8_t count, const void* buf) {
+    if (count == 0) return -1;
+    // 越界保护: lba+count 超过磁盘容量(已钳到 LBA28 上限)时拒绝,
+    // 防止写入回绕到低位扇区、覆盖无关数据 (大盘越界写坏数据)。
+    if ((uint64_t)lba + count > ata_total_sectors()) return -1;
     const uint8_t* p = (const uint8_t*)buf;
     for (int i = 0; i < count; i++) {
         ata_select(lba + i);
@@ -65,11 +73,11 @@ int ata_write_sectors(uint32_t lba, uint8_t count, const void* buf) {
         outs_words(ATA_DATA, p, 256); // 512 bytes
         p += 512;
     }
-    // 等待写入完成
-    int r = ata_wait(0, 0);
+    // 等待写入完成 (BSY 清除, 非 ERR)
+    int r = ata_wait(ATA_SR_BSY, 0);
     if (r != 0) return -1;
     outb(ATA_CMD, 0xE7);              // FLUSH CACHE
-    ata_wait(0, 0);
+    ata_wait(ATA_SR_BSY, 0);
     return 0;
 }
 
@@ -115,11 +123,18 @@ const char* ata_model(void) {
 uint64_t ata_total_sectors(void) {
     if (!g_ata_ok) return 0;
     // 优先 LBA48 (word 83 bit2), 否则 LBA28 (words 60-61)
+    uint64_t total;
     if (g_ata_id[83] & (1u << 2)) {
         uint64_t lo = (uint64_t)g_ata_id[100] | ((uint64_t)g_ata_id[101] << 16);
         uint64_t hi = (uint64_t)g_ata_id[102] | ((uint64_t)g_ata_id[103] << 16);
-        return lo | (hi << 32);
+        total = lo | (hi << 32);
+    } else {
+        total = ((uint64_t)g_ata_id[61] << 16) | g_ata_id[60];
     }
-    return ((uint64_t)g_ata_id[61] << 16) | g_ata_id[60];
+    // 本驱动仅实现 LBA28 PIO。ata_select 只取 LBA 的 bit24-27 (4 位),
+    // 若 lba >= 2^28 则高 4 位以上被静默截断, 写操作会回绕到错误扇区、
+    // 覆盖无关数据。因此把上报容量钳到 2^28 扇区(128GiB), 与 I/O 路径一致。
+    if (total > 0x10000000ULL) total = 0x10000000ULL;
+    return total;
 }
 

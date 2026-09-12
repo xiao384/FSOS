@@ -70,13 +70,17 @@ static pte_t* walk_pt(uint64_t vaddr, pt_level_t target_level, int create) {
         if (!(entry & PG_PRESENT)) {
             if (!create) return 0;
             // 分配新页表 (4KB, 物理地址 = 虚拟地址, 当前全映射)
-            uint64_t new_table_va = (uint64_t)(uintptr_t)kmalloc(4096);
-            if (!new_table_va) return 0;
+            // kmalloc 仅保证 16 字节对齐, 而页表必须 4KB 对齐, 否则写入 CR3
+            // 的基址会偏移到错误的内存页 -> 新建中间页表时页故障/错映射。
+            // 多分配一页并在块内向上对齐 (与 paging_clone_kernel 一致)。
+            uint64_t raw = (uint64_t)(uintptr_t)kmalloc(4096 + 0x1000);
+            if (!raw) return 0;
+            uint64_t new_table_va = (raw + 0xFFF) & ~0xFFFULL;
             // 清零
             uint64_t* p = (uint64_t*)(uintptr_t)new_table_va;
             for (int i = 0; i < 512; i++) p[i] = 0;
             // 设置表项: present + rw + user + 物理地址
-            table[idx] = (new_table_va & ~0xFFFULL) | PG_PRESENT | PG_RW | PG_USER;
+            table[idx] = new_table_va | PG_PRESENT | PG_RW | PG_USER;
             entry = table[idx];
         }
         table = (uint64_t*)(uintptr_t)(entry & ~0xFFFULL);
@@ -112,10 +116,12 @@ int64_t paging_query(uint64_t vaddr, uint64_t* flags) {
         pte_t entry = table[idx];
         if (!(entry & PG_PRESENT)) return -1;
         if (entry & PG_PS) {
-            // 大页: 在 PD 级 (2MB)
+            // 大页: 命中层级不同页大小不同 (lvl=1 -> 1GB, lvl=2 -> 2MB)
+            // 必须用对应层级的页内偏移掩码, 否则 1GB 页会算错物理地址。
             if (flags) *flags = entry & 0xFFF;
-            uint64_t paddr = entry & ~0xFFFULL;
-            paddr += vaddr & 0x1FFFFF;  // 页内偏移
+            uint64_t off = (1ULL << shifts[lvl]) - 1;  // 该级页大小 - 1
+            uint64_t paddr = entry & ~off;
+            paddr += vaddr & off;
             return (int64_t)paddr;
         }
         table = (uint64_t*)(uintptr_t)(entry & ~0xFFFULL);

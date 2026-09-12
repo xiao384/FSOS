@@ -390,6 +390,33 @@ static int page_diskinfo(int disk_ok, char* summary) {
     }
 }
 
+// 页 4: 二次确认擦除 (防误操作: 必须再次点击 Install 才真正写盘)
+static int page_confirm(void) {
+    fill(0, 0, SW - 1, SH - 1, BG);
+    title();
+    text(40, 40, "Confirm disk erase", COL_WHITE, BG);
+    text(40, 64, "WARNING: this will PERMANENTLY erase ALL", COL_YELLOW, BG);
+    text(40, 76, "data on the target hard disk.", COL_YELLOW, BG);
+    text(40, 100, "This operation cannot be undone.", COL_YELLOW, BG);
+    text(40, 128, "Click 'Install' to proceed, or 'Back'/ESC to cancel.", COL_LGRAY, BG);
+
+    g_nctl = 0;
+    static ctl_t btn_install = { CT_BUTTON, 230, 165, 70, "Install", 0, 0, 0, 0, 1 };
+    static ctl_t btn_back = { CT_BUTTON, 150, 165, 70, "Back", 0, 0, 0, 0, 1 };
+    g_ctls[g_nctl++] = &btn_back;
+    g_ctls[g_nctl++] = &btn_install;
+    g_focus = ctl_index(&btn_back);
+
+    for (;;) {
+        draw_ctls();
+        mouse_state_t m; mouse_get(&m); draw_cursor(m.x, m.y); gfx_flip();
+        int r = run_page();
+        if (r == -2) return -2;                    // ESC 取消不写盘
+        if (r == ctl_index(&btn_back)) return 3;   // 回磁盘确认页
+        if (r == ctl_index(&btn_install)) return 5; // 去写入页
+    }
+}
+
 static void progress(int pct) {
     int x0 = 44, y0 = 120, x1 = 276, y1 = 134;
     rect(x0 - 1, y0 - 1, x1 + 1, y1 + 1, COL_WHITE);
@@ -437,7 +464,11 @@ void installer_run(void) {
             summary[n] = 0;
             int r = page_diskinfo(disk_ok, summary);
             if (r == -2) reboot();
-            if (r == 2) page = 2; else page = 5;   // 去写入页
+            if (r == 2) page = 2; else page = 6;   // 去二次确认页
+        } else if (page == 6) {
+            int r = page_confirm();
+            if (r == -2) reboot();
+            if (r == 3) page = 3; else page = 5;   // 确认后去写入页
         } else if (page == 5) {
             // ---- 写入进度页 ----
             fill(0, 0, SW - 1, SH - 1, BG);
@@ -464,6 +495,14 @@ void installer_run(void) {
             }
 
             int total = (int)(install_image_size / SECTOR);
+            // 容量自检: 镜像扇区数不得超过磁盘容量, 且安装标记扇区必须在盘内。
+            // 否则 ata_write_sectors 会越界回绕写坏数据。
+            uint64_t disk_total = ata_total_sectors();
+            if ((uint64_t)total > disk_total || (uint64_t)MARKER_LBA >= disk_total) {
+                text(40, 150, "ERROR: image does not fit on disk.", COL_RED, BG);
+                gfx_flip();
+                for (;;) __asm__ volatile("pause");
+            }
             int chunk = 64;
             for (int lba = 0; lba < total; lba += chunk) {
                 int nn = (total - lba < chunk) ? (total - lba) : chunk;
