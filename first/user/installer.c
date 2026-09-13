@@ -34,10 +34,13 @@ extern const uint32_t install_image_size;   // 镜像字节数
 #define ADMIN_ROLE 1
 #define GUEST_ROLE 0
 
-// ---- 屏幕常量 ----
-#define SW 320
-#define SH 200
+// ---- 屏幕常量 (hires: 动态适配分辨率) ----
+#define SW VGA_W
+#define SH SCREEN_H
 #define BG  COL_BLUE
+// hires: 比例缩放宏 (320x200 基准)
+#define SX(x) ((x) * SW / 320)
+#define SY(y) ((y) * SH / 200)
 
 // ---- 控件类型 ----
 typedef enum { CT_BUTTON, CT_TEXT, CT_CHECK } ctl_type;
@@ -288,17 +291,22 @@ static int page_welcome(void) {
 static int page_account(char* admin, char* adminpw, ctl_t* guest_chk) {
     fill(0, 0, SW - 1, SH - 1, BG);
     title();
-    text(40, 26, "Create your administrator account", COL_WHITE, BG);
+    text(SX(40), SY(26), "Create your administrator account", COL_WHITE, BG);
 
     g_nctl = 0;
     static ctl_t t_admin = { CT_TEXT, 40, 50, 150, "Admin :", 0, 0, 0, 0, 1 };
+    t_admin.x = SX(40); t_admin.y = SY(50); t_admin.w = SX(150);
     t_admin.buf = admin; t_admin.max = 16;
     static ctl_t t_adminpw = { CT_TEXT, 40, 78, 150, "Password :", 0, 0, 1, 0, 1 };
+    t_adminpw.x = SX(40); t_adminpw.y = SY(78); t_adminpw.w = SX(150);
     t_adminpw.buf = adminpw; t_adminpw.max = 16;
     static ctl_t chk_guest = { CT_CHECK, 40, 108, 0, "Create a guest account", 0, 0, 0, 0, 1 };
+    chk_guest.x = SX(40); chk_guest.y = SY(108);
     *guest_chk = chk_guest;
     static ctl_t btn_next = { CT_BUTTON, 230, 165, 70, "Next", 0, 0, 0, 0, 1 };
+    btn_next.x = SX(230); btn_next.y = SY(165); btn_next.w = SX(70);
     static ctl_t btn_back = { CT_BUTTON, 150, 165, 70, "Back", 0, 0, 0, 0, 1 };
+    btn_back.x = SX(150); btn_back.y = SY(165); btn_back.w = SX(70);
     g_ctls[g_nctl++] = &t_admin;
     g_ctls[g_nctl++] = &t_adminpw;
     g_ctls[g_nctl++] = guest_chk;

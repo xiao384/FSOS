@@ -13,12 +13,14 @@
 #include "wm.h"
 #include "ata.h"
 #include "layout.h"
+#include "theme.h"
 #include <stdint.h>
 
-#define FM_HDR_H   12
-#define FM_INFO_H  36     // 三行: 磁盘容量 / FS 用量 / 路径面包屑
-#define FM_ROW_H   12
-#define FM_FOOT_H  11
+#define FM_HDR_H   19     // Finder 工具栏（容纳 16px 汉字）
+#define FM_INFO_H  32     // 两行: 磁盘容量+路径 / FS 用量
+#define FM_ROW_H   16     // 列表行高 (容纳 16px 汉字)
+#define FM_FOOT_H  18     // 状态/提示行
+#define FM_SIDE_W  (VGA_W * 72 / 320)  // hires: 按屏幕宽度缩放侧边栏
 
 static char g_fm_names[FS_MAX_FILES][FS_NAME_SZ];
 static int  g_fm_size[FS_MAX_FILES];
@@ -34,6 +36,8 @@ static int  g_fm_confirm = 0;     // 删除二次确认
 static int  g_fm_delidx = -1;
 static int  g_fm_list0 = 0;       // 列表区屏幕起始 Y (draw 时记录, on_mouse 用)
 static int  g_fm_listH = 0;       // 列表区像素高
+static int  g_fm_listX = 0, g_fm_listW = 0;
+static int  g_fm_x = 0, g_fm_y = 0, g_fm_w = 0;
 
 // 当前目录导航状态
 static uint32_t g_fm_dir = LBA_FS_DIR;             // 当前目录块 LBA
@@ -128,34 +132,53 @@ static void fm_path_str(char* out){
 }
 
 void filemgr_draw(int x,int y,int w,int h){
-    // 标题条
-    gfx_fill_idx(x, y, x+w-1, y+FM_HDR_H-1, COL_ACCENT);
-    cjk_text(x+4, y+2, "文件管理器", COL_WHITE, COL_ACCENT);
+    // Finder 工具栏：应用窗口外层已有标题栏，这里只提供当前位置与常用操作。
+    g_fm_x=x; g_fm_y=y; g_fm_w=w;
+    gfx_fill_idx(x, y, x+w-1, y+FM_HDR_H-1, COL_TASKBAR);
+    cjk_text(x+5, y+1, "文件", COL_WHITE, COL_TASKBAR);
+    cjk_text(x+42, y+1, "浏览", COL_LGRAY, COL_TASKBAR);
     char cnt[16]; char* p=cnt;
     p=app_str(p," "); p=app_uint(p,(unsigned)g_fm_n); p=app_str(p,"/"); p=app_uint(p,(unsigned)FS_MAX_FILES);
-    int cw=cjk_text_w(cnt); cjk_text(x+w-4-cw, y+2, cnt, COL_WHITE, COL_ACCENT);
+    int cw=cjk_text_w(cnt); cjk_text(x+w-4-cw, y+1, cnt, COL_LGRAY, COL_TASKBAR);
 
-    // 信息区 (三行)
+    // 左侧边栏：只保留根目录与上一级两个低门槛入口，键盘操作仍完全可用。
+    int side_y=y+FM_HDR_H, side_bottom=y+h-FM_FOOT_H;
+    gfx_fill_idx(x, side_y, x+FM_SIDE_W-1, side_bottom-1, COL_TITLEBG);
+    cjk_text(x+6, side_y+3, "位置", COL_LGRAY, COL_TITLEBG);
+    uint8_t root_bg=(g_fm_depth==0)?COL_ACCENT_SOFT:COL_TITLEBG;
+    gfx_fill_round_idx(x+3, side_y+18, x+FM_SIDE_W-4, side_y+35, RADIUS_CTRL, root_bg);
+    cjk_text(x+8, side_y+19, "根目录", COL_WHITE, root_bg);
+    if(g_fm_depth>0){
+        gfx_fill_round_idx(x+3, side_y+39, x+FM_SIDE_W-4, side_y+56, RADIUS_CTRL, COL_TITLEBG);
+        cjk_text(x+8, side_y+40, "上级目录", COL_LCYAN, COL_TITLEBG);
+    }
+    cjk_text(x+6, side_y+70, "操作", COL_LGRAY, COL_TITLEBG);
+    cjk_text(x+8, side_y+86, "N 新建", COL_WHITE, COL_TITLEBG);
+    cjk_text(x+8, side_y+102, "B 文件夹", COL_WHITE, COL_TITLEBG);
+
+    int mx=x+FM_SIDE_W, mw=w-FM_SIDE_W;
+
+    // 信息区 (两行: 磁盘容量+路径 / FS 用量)
     int iy=y+FM_HDR_H;
-    gfx_fill_idx(x, iy, x+w-1, iy+FM_INFO_H-1, COL_PANEL);
+    gfx_fill_idx(mx, iy, mx+mw-1, iy+FM_INFO_H-1, COL_PANEL);
     int ue=0, us=0; fs_stats_total(&ue,&us);
     int used_kb = us/2;                              // 已用扇区 -> KB
     int free_kb = (FS_DATA_SECS - us)/2;            // FS 数据区剩余 KB
     uint64_t total = ata_total_sectors();
-    char l1[64]; char* p1=l1;
-    p1=app_str(p1,"磁盘 ");
-    const char* mdl=ata_model();
-    int mc=0; while(mdl[mc]&&mc<16){ *p1++=mdl[mc++]; }
-    p1=app_str(p1," 总"); p1=app_gb(p1, total);
-    *p1=0;
-    cjk_text(x+4, iy+2, l1, COL_WHITE, COL_PANEL);
+    // 第一行: "磁盘X.XXGB 路径 " + 面包屑 (面包屑超宽则省略)
+    char l1[40]; char* p1=l1;
+    p1=app_str(p1,"磁盘"); p1=app_gb(p1, total); p1=app_str(p1," 路径 "); *p1=0;
+    cjk_text(mx+4, iy+1, l1, COL_WHITE, COL_PANEL);
+    int px0 = mx+4+cjk_text_w(l1);
+    char pbuf[64]; fm_path_str(pbuf);
+    cjk_text_ellipsis(px0, iy+1, pbuf, mx+mw-4-px0, COL_LCYAN, COL_PANEL);
+    // 第二行: FS 用量
     char l2[64]; char* p2=l2;
-    p2=app_str(p2,"FS 已用 "); p2=app_uint(p2,(unsigned)ue); p2=app_str(p2,"项/");
-    p2=app_uint(p2,(unsigned)used_kb); p2=app_str(p2,"KB 剩"); p2=app_uint(p2,(unsigned)free_kb); p2=app_str(p2,"KB");
+    p2=app_str(p2,"已用 "); p2=app_uint(p2,(unsigned)ue); p2=app_str(p2,"项 ");
+    p2=app_uint(p2,(unsigned)used_kb); p2=app_str(p2,"KB  剩 ");
+    p2=app_uint(p2,(unsigned)free_kb); p2=app_str(p2,"KB");
     *p2=0;
-    cjk_text(x+4, iy+14, l2, COL_WHITE, COL_PANEL);
-    char l3[64]; char* p3=l3; p3=app_str(p3,"路径 "); fm_path_str(p3);
-    cjk_text(x+4, iy+26, l3, COL_LCYAN, COL_PANEL);
+    cjk_text(mx+4, iy+17, l2, COL_WHITE, COL_PANEL);
 
     // 列表区
     int ly0=y+FM_HDR_H+FM_INFO_H;
@@ -165,9 +188,9 @@ void filemgr_draw(int x,int y,int w,int h){
     if(g_fm_sel<g_fm_top) g_fm_top=g_fm_sel;
     if(g_fm_sel>=g_fm_top+rows) g_fm_top=g_fm_sel-rows+1;
     if(g_fm_top<0) g_fm_top=0;
-    g_fm_list0=ly0; g_fm_listH=listH;
+    g_fm_list0=ly0; g_fm_listH=listH; g_fm_listX=mx; g_fm_listW=mw;
 
-    gfx_fill_idx(x, ly0, x+w-1, ly0+listH-1, COL_WHITE);
+    gfx_fill_idx(mx, ly0, mx+mw-1, ly0+listH-1, COL_WHITE);
     for(int r=0;r<rows;r++){
         int idx=g_fm_top+r;
         if(idx>=g_fm_n) break;
@@ -175,13 +198,13 @@ void filemgr_draw(int x,int y,int w,int h){
         int sel=(idx==g_fm_sel);
         uint8_t bg = sel?COL_ACCENT_SOFT:COL_WHITE;
         uint8_t fg = sel?COL_ACCENT:COL_BLACK;
-        if(sel) gfx_fill_idx(x, ry, x+w-1, ry+FM_ROW_H-1, COL_ACCENT_SOFT);
+        if(sel) gfx_fill_round_idx(mx+2, ry, mx+mw-3, ry+FM_ROW_H-1, RADIUS_CTRL, COL_ACCENT_SOFT);
         // 名称 (文件夹追加 "/" 标记)
         char disp[FS_NAME_SZ+2];
         int di=0; while(g_fm_names[idx][di] && di<FS_NAME_SZ-1){ disp[di]=g_fm_names[idx][di]; di++; }
         disp[di]=0;
         if(fm_isdir(idx)){ disp[di++]='/'; disp[di]=0; }
-        cjk_text(x+4, ry+2, disp, fm_isdir(idx)?COL_LBLUE:fg, bg);
+        cjk_text(mx+5, ry, disp, fm_isdir(idx)?COL_LBLUE:fg, bg);
         // 大小/类型
         char sbuf[16]; char* sp=sbuf; *sp++=' ';
         if(fm_isup(idx)){ sp=app_str(sp,"上级"); }
@@ -194,27 +217,27 @@ void filemgr_draw(int x,int y,int w,int h){
         }
         *sp=0;
         int sw=cjk_text_w(sbuf);
-        cjk_text(x+w-4-sw, ry+2, sbuf, fg, bg);
+        cjk_text(mx+mw-4-sw, ry, sbuf, fg, bg);
     }
-    if(g_fm_n==0) cjk_text(x+4, ly0+4, "（空）按 N 新建文件  B 新建文件夹", COL_LGRAY, COL_WHITE);
+    if(g_fm_n==0) cjk_text(mx+5, ly0+2, "（空）按 N 新建", COL_LGRAY, COL_WHITE);
 
     // 输入模式: 覆盖信息行显示输入框
     if(g_fm_mode==1){
-        gfx_fill_idx(x, iy, x+w-1, iy+FM_INFO_H-1, COL_BLACK);
+        gfx_fill_idx(mx, iy, mx+mw-1, iy+FM_INFO_H-1, COL_BLACK);
         const char* prompt;
         if(g_fm_op==0) prompt="改名为: ";
         else if(g_fm_op==1) prompt="新建文件名: ";
         else prompt="新建文件夹名: ";
-        cjk_text(x+4, iy+2, prompt, COL_WHITE, COL_BLACK);
-        int px=x+4+cjk_text_w(prompt);
-        cjk_text(px, iy+2, g_fm_input, COL_WHITE, COL_BLACK);
+        cjk_text(mx+4, iy+8, prompt, COL_WHITE, COL_BLACK);
+        int px=mx+4+cjk_text_w(prompt);
+        cjk_text(px, iy+8, g_fm_input, COL_WHITE, COL_BLACK);
         int il=cjk_text_w(g_fm_input);
-        gfx_fill_idx(px+il+1, iy+2, px+il+6, iy+9, COL_WHITE); // 闪烁光标块
+        gfx_fill_idx(px+il+1, iy+8, px+il+6, iy+23, COL_WHITE); // 闪烁光标块
     }
 
     // 右键上下文菜单 (绘制于窗口客户区内, 坐标已夹取)
     if(g_fm_ctx){
-        int mw=116, mh=g_fm_ctx_n*16+4;
+        int mw=116, mh=g_fm_ctx_n*18+4;
         int px=g_fm_ctx_x, py=g_fm_ctx_y;
         if(px+mw > x+w-2) px = x+w-2-mw;
         if(px < x+2) px = x+2;
@@ -223,7 +246,7 @@ void filemgr_draw(int x,int y,int w,int h){
         gfx_fill_idx(px, py, px+mw, py+mh, COL_LGRAY);
         gfx_rect_idx(px+1, py+1, px+mw-1, py+mh-1, COL_DGRAY);
         for(int i=0;i<g_fm_ctx_n;i++){
-            int iy2=py+2+i*16;
+            int iy2=py+2+i*18;
             int act=g_fm_ctx_act[i];
             const char* lbl;
             switch(act){
@@ -236,15 +259,15 @@ void filemgr_draw(int x,int y,int w,int h){
                 case 7: lbl="上级目录"; break;
                 default: lbl="";
             }
-            cjk_text(px+6, iy2+3, lbl, COL_BLACK, COL_LGRAY);
+            cjk_text(px+6, iy2+1, lbl, COL_BLACK, COL_LGRAY);
         }
     }
 
     // 状态/提示行
     int fy=y+h-FM_FOOT_H;
-    gfx_fill_idx(x, fy, x+w-1, y+h-1, COL_PANEL);
-    const char* foot = g_fm_msg[0]? g_fm_msg : "Enter开/Del删 N新文件 B新文件夹 F2改 R刷 右键菜单";
-    cjk_text(x+3, fy+1, foot, COL_WHITE, COL_PANEL);
+    gfx_fill_idx(x, fy, x+w-1, y+h-1, COL_TASKBAR);
+    const char* foot = g_fm_msg[0]? g_fm_msg : "Enter 打开 · Del 删除 · F2 改名";
+    cjk_text(x+5, fy+1, foot, COL_LGRAY, COL_TASKBAR);
 }
 
 int filemgr_key(int k){
@@ -341,7 +364,8 @@ static void filemgr_ctx_exec(int act){
 
 int filemgr_on_rmouse(int mx,int my){
     int row=(my-g_fm_list0)/FM_ROW_H + g_fm_top;
-    int on_file=(my>=g_fm_list0 && my<g_fm_list0+g_fm_listH && row>=0 && row<g_fm_n);
+    int on_file=(mx>=g_fm_listX && mx<g_fm_listX+g_fm_listW &&
+                 my>=g_fm_list0 && my<g_fm_list0+g_fm_listH && row>=0 && row<g_fm_n);
     g_fm_ctx_n=0;
     if(on_file){
         g_fm_sel=row; g_fm_ctx_file=row;
@@ -373,17 +397,27 @@ int filemgr_on_rmouse(int mx,int my){
 void filemgr_close_ctx(void){ g_fm_ctx=0; }
 
 int filemgr_on_mouse(int mx,int my,int ldown){
-    (void)mx;
     if(g_fm_ctx){                                   // 右键菜单打开时, 本点击优先消费
-        int mw=116, mh=g_fm_ctx_n*16+4;
+        int mw=116, mh=g_fm_ctx_n*18+4;
         int mx0=g_fm_ctx_x, my0=g_fm_ctx_y;
         if(mx>=mx0 && mx<=mx0+mw && my>=my0 && my<=my0+mh){
-            int it=(my-my0-2)/16;
+            int it=(my-my0-2)/18;
             if(it>=0 && it<g_fm_ctx_n){ filemgr_ctx_exec(g_fm_ctx_act[it]); g_fm_ctx=0; return 1; }
         }
         g_fm_ctx=0; return 1;                       // 点其它处关闭菜单
     }
     if(ldown!=1) return 0;
+    // Finder 侧边栏：根目录 / 上一级是明确的鼠标入口。
+    int side_y=g_fm_y+FM_HDR_H;
+    if(mx>=g_fm_x && mx<g_fm_x+FM_SIDE_W && my>=side_y && my<g_fm_y+SCREEN_H){
+        if(my>=side_y+18 && my<side_y+36){
+            g_fm_dir=LBA_FS_DIR; g_fm_depth=0; g_fm_sel=0; g_fm_top=0; fm_refresh();
+            return 1;
+        }
+        if(g_fm_depth>0 && my>=side_y+39 && my<side_y+57){ fm_up(); return 1; }
+        return 1;
+    }
+    if(mx<g_fm_listX || mx>=g_fm_listX+g_fm_listW) return 0;
     if(my<g_fm_list0 || my>=g_fm_list0+g_fm_listH) return 0;
     int row=(my-g_fm_list0)/FM_ROW_H + g_fm_top;
     if(row<0 || row>=g_fm_n) return 0;

@@ -20,7 +20,7 @@
 #define DEV_MAX_FILES 16
 #define DEV_BUF       3900      // 编辑缓冲 (略小于 4KB, 留出 NUL)
 #define DEV_COLS      36        // 可见列数 (8px ASCII)
-#define DEV_ROWS      11        // 可见行数
+#define DEV_ROWS      5         // 可见行数 (16px 行高)
 #define DEV_NAME      24
 
 typedef enum { M_LIST = 0, M_EDIT, M_NEWNAME } dev_mode_t;
@@ -181,8 +181,9 @@ static void save_file(void) {
         // 兼容 Better terminal 的索引文件 (它靠 INDEX.TXT 列目录)
         char idx[512]; int p = 0;
         refresh_list();
-        for (int i = 0; i < g_nfiles && p < 480; i++) {
-            for (int j = 0; g_names[i][j] && p < 480; j++) idx[p++] = g_names[i][j];
+        int buf_cap = SCREEN_H * 480 / 200;  // hires: 按屏幕高度缩放缓冲区上限
+        for (int i = 0; i < g_nfiles && p < buf_cap; i++) {
+            for (int j = 0; g_names[i][j] && p < buf_cap; j++) idx[p++] = g_names[i][j];
             idx[p++] = '\n';
         }
         idx[p] = 0;
@@ -302,7 +303,7 @@ static void draw_row(int x, int y, int row, int is_cur_line) {
 
 void devstudio_draw(int x, int y, int w, int h) {
     (void)w;
-    int cy = y + 15;                                    // 标题栏之下
+    int cy = y + 18;                                    // 标题栏之下
 
     // 状态行
     char st[48];
@@ -318,31 +319,31 @@ void devstudio_draw(int x, int y, int w, int h) {
         if (g_dirty) { st[p++] = ' '; st[p++] = '*'; }
         st[p] = 0;
     }
-    gfx_fill_idx(x, cy, x + w - 1, cy + 11, COL_ACCENT);
-    cjk_text(x + 4, cy + 2, st, COL_WHITE, COL_ACCENT);
-    cy += 14;
+    gfx_fill_idx(x, cy, x + w - 1, cy + 17, COL_ACCENT);
+    cjk_text(x + 4, cy + 1, st, COL_WHITE, COL_ACCENT);
+    cy += 20;
 
     if (g_mode == M_LIST) {
         if (g_nfiles == 0) {
             cjk_text(x + 4, cy + 4, "暂无文件 (Ctrl+N 新建)", COL_LGRAY, COL_WHITE);
         }
         for (int i = 0; i < g_nfiles && i < DEV_ROWS; i++) {
-            int yy = cy + i * 11;
-            if (i == g_sel) gfx_fill_idx(x + 2, yy, x + w - 3, yy + 10, COL_ACCENT_SOFT);
-            cjk_text(x + 6, yy + 1, g_names[i],
+            int yy = cy + i * 16;
+            if (i == g_sel) gfx_fill_idx(x + 2, yy, x + w - 3, yy + 15, COL_ACCENT_SOFT);
+            cjk_text(x + 6, yy, g_names[i],
                      (i == g_sel) ? COL_ACCENT : COL_BLACK,
                      (i == g_sel) ? COL_ACCENT_SOFT : COL_WHITE);
         }
         // 提示行
-        cjk_text(x + 4, y + h - 13, "Ctrl+N 新建  Enter 打开  Ctrl+X 删除", COL_LGRAY, COL_WHITE);
+        cjk_text(x + 4, y + h - 18, "Ctrl+N 新建  Enter 打开  Ctrl+X 删除", COL_LGRAY, COL_WHITE);
     } else if (g_mode == M_NEWNAME) {
-        cjk_text(x + 4, cy + 2, "文件名 (如 main.py / a.c / T.java):", COL_BLACK, COL_WHITE);
-        gfx_fill_idx(x + 4, cy + 18, x + w - 8, cy + 30, COL_WHITE);
-        gfx_rect_idx(x + 4, cy + 18, x + w - 8, cy + 30, COL_ACCENT);
-        cjk_text(x + 7, cy + 20, g_new, COL_BLACK, COL_WHITE);
+        cjk_text(x + 4, cy + 1, "文件名 (如 main.py / a.c / T.java):", COL_BLACK, COL_WHITE);
+        gfx_fill_idx(x + 4, cy + 22, x + w - 8, cy + 40, COL_WHITE);
+        gfx_rect_idx(x + 4, cy + 22, x + w - 8, cy + 40, COL_ACCENT);
+        cjk_text(x + 7, cy + 26, g_new, COL_BLACK, COL_WHITE);
         int cw = 8 * (g_newlen + 1);
-        if (cw < w - 16) gfx_fill_idx(x + 6 + 8 * g_newlen, cy + 20, x + 7 + 8 * g_newlen, cy + 28, COL_BLACK);
-        cjk_text(x + 4, y + h - 13, "回车确认  ESC 取消", COL_LGRAY, COL_WHITE);
+        if (cw < w - 16) gfx_fill_idx(x + 6 + 8 * g_newlen, cy + 26, x + 7 + 8 * g_newlen, cy + 38, COL_BLACK);
+        cjk_text(x + 4, y + h - 18, "回车确认  ESC 取消", COL_LGRAY, COL_WHITE);
     } else {
         // 文本编辑区
         int rc = row_count();
@@ -350,15 +351,15 @@ void devstudio_draw(int x, int y, int w, int h) {
         if (g_top < 0) g_top = 0;
         for (int r = 0; r < DEV_ROWS; r++) {
             int rr = g_top + r;
-            int yy = cy + r * 10;
+            int yy = cy + r * 16;
             if (rr < rc) draw_row(x + 2, yy, rr, 0);
         }
         // 光标 (块状)
         int crow = cur_row(), ccol = cur_col();
         if (crow >= g_top && crow < g_top + DEV_ROWS) {
             int cx = x + 2 + ccol * 8;
-            int cyy = cy + (crow - g_top) * 10;
-            gfx_fill_idx(cx, cyy + 1, cx + 1, cyy + 8, COL_BLACK);
+            int cyy = cy + (crow - g_top) * 16;
+            gfx_fill_idx(cx, cyy + 4, cx + 1, cyy + 12, COL_BLACK);
         }
         // 底部: 位置 + 提示
         char pos[16];
@@ -367,9 +368,9 @@ void devstudio_draw(int x, int y, int w, int h) {
         pos[q++] = ':';
         pos[q++] = 'C'; pos[q++] = '0' + (cc / 10) % 10; pos[q++] = '0' + cc % 10;
         pos[q] = 0;
-        cjk_text(x + w - 60, y + h - 13, pos, COL_LGRAY, COL_WHITE);
-        cjk_text(x + 4, y + h - 13, "Ctrl+S 保存  Ctrl+R 运行  ESC 返回", COL_LGRAY, COL_WHITE);
+        cjk_text(x + w - 60, y + h - 18, pos, COL_LGRAY, COL_WHITE);
+        cjk_text(x + 4, y + h - 18, "Ctrl+S 保存  Ctrl+R 运行  ESC 返回", COL_LGRAY, COL_WHITE);
     }
 
-    if (g_msg[0]) cjk_text(x + 150, y + 17, g_msg, COL_YELLOW, COL_ACCENT);
+    if (g_msg[0]) cjk_text(x + 150, y + 18, g_msg, COL_YELLOW, COL_ACCENT);
 }

@@ -29,11 +29,11 @@ static void open_quick(void);
 #define ED_MAX_TABS  8
 #define ED_BUF       4096      // 单标签缓冲 (<= FS_MAX_SIZE=4096)
 #define ED_NAME      24
-#define ED_ROW_H     11       // 每行像素高
+#define ED_ROW_H     16       // 每行像素高 (容纳 16px 汉字)
 #define ED_GUTTER    28       // 行号槽宽
 #define ED_SB_W      84       // 侧边栏宽
-#define ED_TAB_H     13       // 标签栏高
-#define ED_STATUS_H  11       // 状态栏高
+#define ED_TAB_H     18       // 标签栏高 (容纳 16px 汉字)
+#define ED_STATUS_H  18       // 状态栏高
 
 typedef enum { ED_NORMAL=0, ED_CMD, ED_QUICK, ED_NAMEMODE } ed_mode_t;
 
@@ -156,7 +156,8 @@ static void move_down(void){ ed_tab_t* t=A(); int r=cur_row(),c=cur_col(); int r
 static void refresh_files(void){ fs_init(); g_nf=fs_list(g_fnames,FS_MAX_FILES); if(g_fsel>=g_nf)g_fsel=g_nf-1; if(g_fsel<0)g_fsel=0; }
 static void write_index(void){
     char idx[512]; int p=0;
-    for(int i=0;i<g_nf&&p<480;i++){ for(int j=0;g_fnames[i][j]&&p<480;j++) idx[p++]=g_fnames[i][j]; idx[p++]='\n'; }
+    int buf_cap = SCREEN_H * 480 / 200;  // hires: 按屏幕高度缩放缓冲区上限
+    for(int i=0;i<g_nf&&p<buf_cap;i++){ for(int j=0;g_fnames[i][j]&&p<buf_cap;j++) idx[p++]=g_fnames[i][j]; idx[p++]='\n'; }
     idx[p]=0; fs_write("INDEX.TXT",idx);
 }
 static void open_tab(const char* name, uint32_t dir){
@@ -361,8 +362,8 @@ void editor_draw(int x,int y,int w,int h){
         uint8_t bg = (i==g_cur)?COL_ACCENT:COL_DGRAY;
         uint8_t fg = (i==g_cur)?COL_WHITE:COL_LGRAY;
         gfx_fill_idx(tx, y+1, tx+tw-1, ty0-2, bg);
-        cjk_text(tx+3, y+3, lab, fg, bg);
-        if(i==g_cur) cjk_text(tx+tw-9, y+3, "x", COL_WHITE, bg); // 关闭标记
+        cjk_text(tx+3, y+1, lab, fg, bg);
+        if(i==g_cur) cjk_text(tx+tw-9, y+1, "x", COL_WHITE, bg); // 关闭标记
         tx += tw + 3;
     }
 
@@ -370,14 +371,14 @@ void editor_draw(int x,int y,int w,int h){
     if(g_sb){
         gfx_fill_idx(x, ty0, x+sb_w-1, status_y-1, COL_DGRAY);
         cjk_text(x+4, ty0+2, "资源管理器", COL_WHITE, COL_DGRAY);
-        gfx_rect_idx(x+2, ty0+12, x+sb_w-3, ty0+13, COL_ACCENT);
-        int ly = ty0+16;
+        gfx_rect_idx(x+2, ty0+19, x+sb_w-3, ty0+20, COL_ACCENT);
+        int ly = ty0+22;
         for(int i=0;i<g_nf;i++){
-            if(ly+10 > status_y-2) break;
-            if(i==g_fsel) gfx_fill_idx(x+2, ly, x+sb_w-3, ly+10, COL_ACCENT_SOFT);
+            if(ly+16 > status_y-2) break;
+            if(i==g_fsel) gfx_fill_idx(x+2, ly, x+sb_w-3, ly+15, COL_ACCENT_SOFT);
             uint8_t fg=(i==g_fsel)?COL_ACCENT:COL_LGRAY;
-            cjk_text_ellipsis(x+6, ly+1, g_fnames[i], sb_w-12, fg, (i==g_fsel)?COL_ACCENT_SOFT:COL_DGRAY);
-            ly += 11;
+            cjk_text_ellipsis(x+6, ly, g_fnames[i], sb_w-12, fg, (i==g_fsel)?COL_ACCENT_SOFT:COL_DGRAY);
+            ly += 16;
         }
     }
 
@@ -406,27 +407,27 @@ void editor_draw(int x,int y,int w,int h){
                 for(int m=n-1;m>=0;m--){ num[q++]=tmp[m]; }
                 num[q]=0;
                 int nw=cjk_text_w(num);
-                cjk_text(gutter_x+ED_GUTTER-nw-2, ry+1, num, COL_DGRAY, lbg);
+                cjk_text(gutter_x+ED_GUTTER-nw-2, ry, num, COL_DGRAY, lbg);
             }
             // 内容
             if(rr<rc){
                 int rs=row_start(rr), re=row_end(rr);
                 int n=0; char line[256]; for(int i=rs;i<re&&n<255;i++) line[n++]=t->buf[i]; line[n]=0;
-                draw_hl(text_x, ry+1, line, n, lang, lbg);
+                draw_hl(text_x, ry, line, n, lang, lbg);
                 // 光标 (块状, 闪烁)
                 if(is_cur){
                     uint8_t phase = (uint8_t)((get_ticks()/450)&1);
                     if(phase){
                         int cx = text_x + cur_col()*8;
-                        gfx_fill_idx(cx, ry+1, cx+5, ry+ED_ROW_H-2, COL_LGRAY);
+                        gfx_fill_idx(cx, ry+4, cx+5, ry+ED_ROW_H-4, COL_LGRAY);
                     }
                 }
             }
         }
     } else {
-        cjk_text(text_x, ty0+6, "无打开的文件", COL_LGRAY, COL_BLACK);
-        cjk_text(text_x, ty0+20, "Ctrl+P 快速打开  Ctrl+N 新建", COL_DGRAY, COL_BLACK);
-        cjk_text(text_x, ty0+34, "Ctrl+Shift+P 命令面板  Ctrl+B 侧栏", COL_DGRAY, COL_BLACK);
+        cjk_text(text_x, ty0+4, "无打开的文件", COL_LGRAY, COL_BLACK);
+        cjk_text(text_x, ty0+22, "Ctrl+P 快速打开  Ctrl+N 新建", COL_DGRAY, COL_BLACK);
+        cjk_text(text_x, ty0+40, "Ctrl+Shift+P 命令面板  Ctrl+B 侧栏", COL_DGRAY, COL_BLACK);
     }
 
     // ---- 状态栏 ----
@@ -440,14 +441,14 @@ void editor_draw(int x,int y,int w,int h){
         for(int i=0;g_msg[i]&&p<22;i++) s[p++]=g_msg[i];
     }
     s[p]=0;
-    cjk_text(x+4, status_y+2, s, COL_WHITE, COL_ACCENT);
+    cjk_text(x+4, status_y+1, s, COL_WHITE, COL_ACCENT);
     if(t){
         char pos[16]; int q=0; int cr=cur_row()+1, cc=cur_col()+1;
         pos[q++]='L'; pos[q++]='0'+cr/10; pos[q++]='0'+cr%10;
         pos[q++]=':';
         pos[q++]='C'; pos[q++]='0'+cc/10; pos[q++]='0'+cc%10;
         pos[q]=0;
-        cjk_text(x+w-70, status_y+2, pos, COL_WHITE, COL_ACCENT);
+        cjk_text(x+w-70, status_y+1, pos, COL_WHITE, COL_ACCENT);
     }
 
     // ---- 悬浮提示 ----
@@ -461,31 +462,31 @@ void editor_draw(int x,int y,int w,int h){
 }
 
 static void draw_overlay(void){
-    int bw=224, bh=132;
+    int bw=224, bh=140;
     int bx=g_cx+(g_cw-bw)/2, by=g_cy+(g_ch-bh)/2;
     gfx_fill_idx(bx,by,bx+bw-1,by+bh-1,COL_DGRAY);
     gfx_rect_idx(bx,by,bx+bw-1,by+bh-1,COL_ACCENT);
     const char* title = (g_mode==ED_QUICK)?"快速打开文件":(g_mode==ED_NAMEMODE?g_prompt:"命令面板 (输入过滤)");
     cjk_text(bx+4,by+3,title,COL_WHITE,COL_DGRAY);
     // 输入行
-    gfx_fill_idx(bx+4,by+16,bx+bw-5,by+27,COL_BLACK);
-    gfx_rect_idx(bx+4,by+16,bx+bw-5,by+27,COL_ACCENT);
+    gfx_fill_idx(bx+4,by+22,bx+bw-5,by+40,COL_BLACK);
+    gfx_rect_idx(bx+4,by+22,bx+bw-5,by+40,COL_ACCENT);
     const char* inp = (g_mode==ED_NAMEMODE)?g_newname:g_filter;
-    cjk_text(bx+7,by+18,inp,COL_WHITE,COL_BLACK);
+    cjk_text(bx+7,by+26,inp,COL_WHITE,COL_BLACK);
     int il=estlen(inp);
-    gfx_fill_idx(bx+6+8*il,by+18,bx+7+8*il,by+26,COL_LGRAY);
+    gfx_fill_idx(bx+6+8*il,by+26,bx+7+8*il,by+38,COL_LGRAY);
     // 列表
     recompute();
-    int ly=by+32;
-    for(int i=0;i<g_nmatch && (ly+10)<(by+bh-4);i++){
+    int ly=by+46;
+    for(int i=0;i<g_nmatch && (ly+16)<(by+bh-4);i++){
         int idx=g_match[i];
         const char* label = (g_mode==ED_QUICK)?g_fnames[idx]:CMD[idx];
         int sel=(i==g_psel);
-        if(sel) gfx_fill_idx(bx+4,ly,bx+bw-5,ly+10,COL_ACCENT_SOFT);
+        if(sel) gfx_fill_idx(bx+4,ly,bx+bw-5,ly+15,COL_ACCENT_SOFT);
         cjk_text(bx+8,ly+1,label, sel?COL_ACCENT:COL_LGRAY, sel?COL_ACCENT_SOFT:COL_DGRAY);
-        ly+=11;
+        ly+=18;
     }
-    if(g_nmatch==0) cjk_text(bx+8,by+32,"(无匹配)",COL_DGRAY,COL_DGRAY);
+    if(g_nmatch==0) cjk_text(bx+8,by+46,"(无匹配)",COL_DGRAY,COL_DGRAY);
 }
 
 // ---------------- 鼠标 ----------------
@@ -514,7 +515,7 @@ int editor_on_mouse(int mx,int my,int ldown){
 
     // 侧边栏文件列表
     if(g_sb && rx < ED_SB_W){
-        int idx = (ry - (ty0+16)) / 11;
+        int idx = (ry - (ty0+22)) / 16;
         if(idx>=0 && idx<g_nf){ g_fsel=idx; open_tab(g_fnames[idx], LBA_FS_DIR); }
         return 1;
     }

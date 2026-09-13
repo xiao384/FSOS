@@ -510,10 +510,13 @@ probe_ext:
     ret
 
 ; ============================================================
-; VBE 探测: 设置 640x480x32bpp 线性帧缓冲模式
+; VBE 探测: 候选列表收集 → 排序 → 择优激活
+; 遍历 VBE 模式列表, 收集满足 32bpp+LFB+DirectColor+≥640x480 的模式,
+; 按 width×height 降序排序 (同像素优先 16:9), 逐个尝试激活, 首个成功写 0x6400.
 ; 成功: 物理地址 0x6400 写入 VBE 信息块 (magic 'VBE2'), 供 gfx_init() 激活 LFB
-; 失败: 不写 magic, gfx_init() 回退 mode13h
-; 内存: 0x7000=VBE Controller Info (512B), 0x7400=Mode Info (256B)
+; 失败: 不写 magic, gfx_init() 回退 GOP/mode13h
+; 内存: 0x7000=VBE Ctrl Info(512B), 0x7400=Mode Info(256B)
+;       0x77FE=激活索引, 0x77FF=候选计数, 0x7800=候选数组(32×8B=256B)
 ; 0x6400 信息块布局 (与 gfx.c vbe_info_t 一致):
 ;   +0  uint32 magic='VBE2'  +4 width  +8 height  +12 pitch
 ;   +16 bpp  +20 format(0=RGBX,1=BGRX)  +24 uint64 fb_addr
@@ -532,18 +535,20 @@ vbe_setup:
     ; 检查 'VESA' 签名 (小端: 'V','E','S','A' = 0x41534556)
     cmp dword [0x7000], 0x41534556
     jne .vs_fail
-    ; 2. 视频模式列表指针: VbeInfoBlock 偏移14=off, 偏移16=seg
-    mov si, [0x700E]
-    mov ax, [0x7010]
-    mov es, ax                          ; ES:SI = 模式号列表 (每项 2 字节, 0xFFFF 结束)
-.vs_loop:
+    ; 2. 初始化候选计数
+    mov byte [0x77FF], 0
+    ; 3. 遍历模式列表, 收集候选 -> 0x7800 数组
+    mov si, [0x700E]                     ; 模式列表偏移
+    mov ax, [0x7010]                     ; 模式列表段
+    mov es, ax                           ; ES:SI = 模式号列表
+.vs_collect:
     mov cx, [es:si]
     cmp cx, 0xFFFF
-    je .vs_fail                         ; 列表结束, 未找到匹配模式
+    je .vs_sort                          ; 列表结束, 转排序
     add si, 2
-    ; 3. 获取模式信息 -> 0x7400 (AX=4F01, CX=模式号, ES:DI=缓冲)
-    push es                             ; 保存模式列表 ES
-    push si                             ; 保存模式列表 SI
+    ; 获取模式信息 -> 0x7400 (AX=4F01, CX=模式号)
+    push es
+    push si
     xor ax, ax
     mov es, ax
     mov di, 0x7400
@@ -552,56 +557,195 @@ vbe_setup:
     pop si
     pop es
     cmp ax, 0x004F
-    jne .vs_loop
-    ; 4. 校验: ModeAttributes bit0(支持)+bit7(LFB), 640x480x32, MemoryModel=6(DirectColor)
-    ; VBE 2.0 ModeInfoBlock 偏移: +0 ModeAttributes, +18 XRes, +20 YRes,
-    ; +25 BitsPerPixel, +27 MemoryModel
+    jne .vs_collect
+    ; 校验: ModeAttributes bit0(支持)+bit7(LFB), ≥640x480, 32bpp, DirectColor
     test word [0x7400], 0x0081
-    jz .vs_loop
-    cmp word [0x7412], 640              ; XResolution (+18)
-    jne .vs_loop
-    cmp word [0x7414], 480              ; YResolution (+20)
-    jne .vs_loop
-    cmp byte [0x7419], 32               ; BitsPerPixel (+25)
-    jne .vs_loop
-    cmp byte [0x741B], 6                ; MemoryModel (+27, 6=DirectColor)
-    jne .vs_loop
-    ; 5. 设置模式: AX=4F02, BX=模式号|0x4000 (bit14=使用 LFB)
+    jz .vs_collect
+    cmp word [0x7412], 640              ; XRes ≥ 640
+    jb .vs_collect
+    cmp word [0x7414], 480              ; YRes ≥ 480
+    jb .vs_collect
+    cmp byte [0x7419], 32               ; BitsPerPixel == 32
+    jne .vs_collect
+    cmp byte [0x741B], 6                ; MemoryModel == 6 (DirectColor)
+    jne .vs_collect
+    ; 候选数 < 32 检查
+    mov al, [0x77FF]
+    cmp al, 32
+    jae .vs_collect
+    ; 写入候选条目 (8 字节: mode号/width/height/padding)
+    movzx bx, al
+    shl bx, 3                           ; bx = count × 8
+    mov [0x7800 + bx], cx               ; mode 号
+    mov ax, [0x7412]
+    mov [0x7802 + bx], ax               ; width
+    mov ax, [0x7414]
+    mov [0x7804 + bx], ax               ; height
+    mov word [0x7806 + bx], 0           ; padding
+    inc byte [0x77FF]
+    jmp .vs_collect
+
+    ; 4. 选择排序: 按 width×height 降序, 同像素优先 16:9
+.vs_sort:
+    mov cl, [0x77FF]                    ; cl = 候选计数
+    cmp cl, 2
+    jb .vs_activate                     ; 0 或 1 个候选, 无需排序
+    mov ch, 0                           ; ch = i = 0
+.vs_sort_outer:
+    mov al, cl
+    dec al                              ; al = count - 1
+    cmp ch, al
+    jae .vs_activate                    ; i ≥ count-1, 排序完成
+    mov bl, ch                          ; bl = max_idx = i
+    mov bh, ch
+    inc bh                              ; bh = j = i + 1
+.vs_sort_inner:
+    cmp bh, cl
+    jae .vs_sort_swap_check             ; j ≥ count, 内循环结束
+    ; 计算乘积并比较: product(j) vs product(max_idx)
+    movzx si, bh
+    shl si, 3                           ; si = j × 8
+    movzx di, bl
+    shl di, 3                           ; di = max_idx × 8
+    ; product(j) = width_j × height_j → DX:AX
+    mov ax, [0x7802 + si]
+    mul word [0x7804 + si]
+    push dx
+    push ax
+    ; product(max) = width_max × height_max → DX:AX
+    mov ax, [0x7802 + di]
+    mul word [0x7804 + di]
+    pop cx                              ; CX = low product(j)
+    pop bp                              ; BP = high product(j)
+    ; 比较 BP:CX (j) vs DX:AX (max), 32 位无符号
+    cmp bp, dx
+    ja .vs_j_better
+    jb .vs_j_worse
+    cmp cx, ax
+    ja .vs_j_better
+    jb .vs_j_worse
+    ; 乘积相等 — 16:9 偏好: |9×width - 16×height| 小者优先
+    mov ax, [0x7802 + si]               ; width_j
+    mov cx, ax
+    shl ax, 3                           ; 8×width
+    add ax, cx                          ; 9×width
+    mov dx, ax
+    mov ax, [0x7804 + si]               ; height_j
+    mov cx, ax
+    shl ax, 4                           ; 16×height
+    sub dx, ax                          ; 9×w_j - 16×h_j
+    jns .vs_j_abs
+    neg dx
+.vs_j_abs:
+    mov bp, dx                          ; bp = |9×w_j - 16×h_j|
+    mov ax, [0x7802 + di]               ; width_max
+    mov cx, ax
+    shl ax, 3
+    add ax, cx                          ; 9×width_max
+    mov dx, ax
+    mov ax, [0x7804 + di]               ; height_max
+    mov cx, ax
+    shl ax, 4                           ; 16×height_max
+    sub dx, ax
+    jns .vs_max_abs
+    neg dx
+.vs_max_abs:
+    cmp bp, dx                          ; j 偏差 < max 偏差?
+    jb .vs_j_better
+    jmp .vs_j_worse
+.vs_j_better:
+    mov bl, bh                          ; max_idx = j
+.vs_j_worse:
+    inc bh
+    jmp .vs_sort_inner
+.vs_sort_swap_check:
+    cmp bl, ch                          ; max_idx == i?
+    je .vs_sort_next                    ; 无需交换
+    ; 交换候选 i 与 max_idx (8 字节 = 4 words)
+    movzx si, ch
+    shl si, 3
+    movzx di, bl
+    shl di, 3
+    mov ax, [0x7800 + si]
+    mov cx, [0x7800 + di]
+    mov [0x7800 + si], cx
+    mov [0x7800 + di], ax
+    mov ax, [0x7802 + si]
+    mov cx, [0x7802 + di]
+    mov [0x7802 + si], cx
+    mov [0x7802 + di], ax
+    mov ax, [0x7804 + si]
+    mov cx, [0x7804 + di]
+    mov [0x7804 + si], cx
+    mov [0x7804 + di], ax
+    mov ax, [0x7806 + si]
+    mov cx, [0x7806 + di]
+    mov [0x7806 + si], cx
+    mov [0x7806 + di], ax
+.vs_sort_next:
+    inc ch
+    jmp .vs_sort_outer
+
+    ; 5. 择优激活: 遍历排序后候选, 逐个 4F02 设置, 首个成功写信息块
+.vs_activate:
+    cmp byte [0x77FF], 0
+    je .vs_fail                          ; 无候选, 回退
+    mov byte [0x77FE], 0                 ; 激活索引 = 0
+.vs_act_loop:
+    mov al, [0x77FE]
+    cmp al, [0x77FF]
+    jae .vs_fail                         ; 全部候选耗尽
+    movzx bx, al
+    shl bx, 3
+    mov cx, [0x7800 + bx]                ; 模式号
+    ; 设置模式: AX=4F02, BX=模式号|0x4000 (bit14=LFB)
     mov bx, cx
     or bx, 0x4000
     mov ax, 0x4F02
     int 0x10
     cmp ax, 0x004F
-    jne .vs_fail
-    ; 6. 写 VBE 信息块到 0x6400
-    ; VBE 2.0 ModeInfoBlock 偏移: +16 BytesPerScanLine, +18 XRes, +20 YRes,
-    ; +25 BitsPerPixel, +32 RedFieldPosition, +44 PhysBasePtr
-    mov dword [0x6400], 0x32454256      ; magic 'VBE2'
-    movzx eax, word [0x7412]            ; width (+18)
+    jne .vs_act_next                     ; 失败, 尝试下一候选
+    ; 重新获取模式信息 -> 0x7400
+    push cx
+    xor ax, ax
+    mov es, ax
+    mov di, 0x7400
+    mov ax, 0x4F01
+    int 0x10
+    pop cx
+    cmp ax, 0x004F
+    jne .vs_act_next                     ; 获取信息失败, 尝试下一候选
+    ; 写 VBE 信息块到 0x6400
+    mov dword [0x6400], 0x32454256       ; magic 'VBE2'
+    movzx eax, word [0x7412]             ; width (+18)
     mov [0x6404], eax
-    movzx eax, word [0x7414]            ; height (+20)
+    movzx eax, word [0x7414]             ; height (+20)
     mov [0x6408], eax
-    movzx eax, word [0x7410]            ; BytesPerScanLine (+16)
+    movzx eax, word [0x7410]             ; BytesPerScanLine (+16)
     test eax, eax
-    jnz .vs_pitch
-    mov eax, 2560                       ; 回退: 640 * 4
-.vs_pitch:
-    mov [0x640C], eax                   ; pitch
-    movzx eax, byte [0x7419]            ; bpp (+25)
+    jnz .vs_pitch_ok
+    movzx eax, word [0x7412]             ; 回退: width × 4
+    shl eax, 2
+.vs_pitch_ok:
+    mov [0x640C], eax                    ; pitch
+    movzx eax, byte [0x7419]             ; bpp (+25)
     mov [0x6410], eax
     ; 颜色顺序: RedFieldPosition(+32)==16 -> RGBX(0), 否则 BGRX(1)
-    movzx eax, byte [0x7420]            ; RedFieldPosition (+32)
+    movzx eax, byte [0x7420]             ; RedFieldPosition (+32)
     cmp eax, 16
     je .vs_rgbx
-    mov dword [0x6414], 1               ; BGRX
+    mov dword [0x6414], 1                ; BGRX
     jmp .vs_fb
 .vs_rgbx:
-    mov dword [0x6414], 0               ; RGBX
+    mov dword [0x6414], 0                ; RGBX
 .vs_fb:
-    mov eax, [0x7428]                   ; PhysBasePtr (+40)
+    mov eax, [0x7428]                    ; PhysBasePtr (+40)
     mov [0x6418], eax
-    mov dword [0x641C], 0               ; 高 32 位 (32 位物理地址)
+    mov dword [0x641C], 0                ; 高 32 位 (32 位物理地址)
     jmp .vs_done
+.vs_act_next:
+    inc byte [0x77FE]
+    jmp .vs_act_loop
 .vs_fail:
 .vs_done:
     pop es

@@ -1,8 +1,8 @@
-// wm.c - FSOS（自由安全操作系统）桌面环境 (Windows 风格 + 中文 + 原创图标)
+// wm.c - FSOS（自由安全操作系统）桌面环境（Aurora：macOS 主导的轻量桌面）
 //
 // 特性:
 //   - 320x200 mode13h 双缓冲, 经 GOP 整数放大到 960x600 上屏
-//   - 渐变"晴空蓝"壁纸 + 白色任务栏/开始菜单 (现代明亮主题)
+//   - 蓝紫夜色壁纸 + 悬浮 Dock / 应用程序面板（纯色分层模拟玻璃感）
 //   - 原创几何图标 (不照搬 Windows 图标) + 中文标签
 //   - 桌面图标 (双击打开) + 网格化开始菜单 (单击启动)
 //   - 窗口: 标题栏(可拖动)、最小化/最大化/关闭按钮、z 序、焦点
@@ -28,15 +28,17 @@
 #include "mp_entry.h"
 #include "cjk.h"
 #include "io.h"
+#include "theme.h"    // ui_polish: 圆角半径/对比组合集中声明
+#include "aurora_wallpaper.h"
 #include "linux.h"     // Linuxulator: Ctrl+Alt+L 运行 FS 中的 Linux ELF (HELLO.ELF)
 // text2x() 时钟大数字从内核内置字体取字形 (与 vga/gfx/cjk 一致, UEFI 下 0xB0000 不可靠)
 #include "boot/uefi/font8x8.h"
 
-// 桌面用动态分辨率 (vga.h 的 VGA_W/SCREEN_H), 适配 mode13h 320x200 或 VBE 640x480
+// 桌面用动态分辨率 (vga.h 的 VGA_W/SCREEN_H), 适配 mode13h 320x200 或 VBE 高分辨率
 #define SCREEN_W   VGA_W
-#define TASKBAR_H  16
+#define TASKBAR_H  (20 * THEME_SF)   // 底部 Dock 保留高度 (随分辨率缩放)
 #define TASKBAR_Y  (SCREEN_H - TASKBAR_H)
-#define TITLE_H    15
+#define TITLE_H    (18 * THEME_SF)   // 标题栏高 (随分辨率缩放)
 
 #define MAXAPP     8
 
@@ -100,10 +102,10 @@ static int dev_tick(void) {
 }
 
 static app_t g_app[MAXAPP] = {
-    { "关于",    10,  16, 176, 116, 1,0,0, 10,16,176,116, 1, d_about,  0 },
-    { "用户",   130,  30, 180, 136, 0,0,0, 130,30,180,136, 0, d_users,  0 },
-    { "时钟",   150,  70, 144, 100, 0,0,0, 150,70,144,100, 0, d_clock,  0 },
-    { "设置",   60,  90, 190, 134, 0,0,0, 60,90,190,134, 0, d_settings, 0 },
+    { "关于",     8,   8, 204, 112, 1,0,0,  8,  8,204,112, 1, d_about,  0 },
+    { "用户",   126,  16, 184, 140, 0,0,0, 126,16,184,140, 0, d_users,  0 },
+    { "时钟",   146,  56, 148, 108, 0,0,0, 146,56,148,108, 0, d_clock,  0 },
+    { "设置",    44,   8, 196, 152, 0,0,0,  44, 8,196,152, 0, d_settings, 0 },
     // 开发: 统一编辑 Python / C-C++ / Java 工程文件 (可在 DevStudio / VSCode 间切换)
     { "开发",     6,   6, 308, 170, 0,0,0,  6, 6,308,170, 0, dev_draw, dev_key, dev_on_mouse, dev_tick, 0 },
     // FSOS 原生 VSCode 风格代码编辑器 (多标签/侧边栏/语法高亮/命令面板/鼠标交互)
@@ -120,6 +122,7 @@ static int   g_focus = 0;
 static int   g_drag = -1;
 static int   g_dox, g_doy;
 static int   g_gfx_inited = 0;
+static int   g_wallpaper_palette_ready = 0;
 
 static int   g_start_open = 0;
 static int   g_sel_icon = -1;
@@ -189,6 +192,18 @@ static const struct { const char* label; int act; int kind; } g_icons[] = {
 static void fill(int x0,int y0,int x1,int y1,uint8_t c){ gfx_fill_idx(x0,y0,x1,y1,c); }
 static void rect(int x0,int y0,int x1,int y1,uint8_t c){ gfx_rect_idx(x0,y0,x1,y1,c); }
 static void txt(int x,int y,const char* s,uint8_t f,uint8_t b){ cjk_text(x,y,s,f,b); }
+static void fill_round(int x0,int y0,int x1,int y1,int r,uint8_t c){
+    if (gfx_is_lfb()) {
+        uint8_t cr,cg,cb; gfx_idx_rgb(c,&cr,&cg,&cb);
+        gfx_fill_round_rgb_aa(x0,y0,x1,y1,r,cr,cg,cb);
+    } else gfx_fill_round_idx(x0,y0,x1,y1,r,c);
+}
+static void rect_round(int x0,int y0,int x1,int y1,int r,uint8_t c){
+    if (gfx_is_lfb()) {
+        uint8_t cr,cg,cb; gfx_idx_rgb(c,&cr,&cg,&cb);
+        gfx_round_rect_rgb_aa(x0,y0,x1,y1,r,cr,cg,cb);
+    } else gfx_round_rect_idx(x0,y0,x1,y1,r,c);
+}
 
 // 8x8 字体放大 2 倍绘制 ASCII (用于时钟大数字)
 static void text2x(int x, int y, const char* s, uint8_t f, uint8_t b) {
@@ -233,15 +248,19 @@ static void draw_cursor(int x, int y) {
 // 原创几何图标 (24x20 画布, 彩色方块底 + 白色图形)
 // kind 0..8: 关于/用户/时钟/设置/终端/Python/C/Java/注销
 // ============================================================
-static void fill_square(int x,int y,int w,int h,uint8_t c) { fill(x,y,x+w-1,y+h-1,c); }
 static void rect_square(int x,int y,int w,int h,uint8_t c) { rect(x,y,x+w-1,y+h-1,c); }
 
 // 填充圆 (近似)
 static void fcircle(int cx, int cy, int r, uint8_t c) {
-    for (int dy = -r; dy <= r; dy++)
-        for (int dx = -r; dx <= r; dx++)
-            if (dx*dx + dy*dy <= r*r)
-                gfx_pixel_idx(cx + dx, cy + dy, c);
+    if (gfx_is_lfb()) {
+        uint8_t cr,cg,cb; gfx_idx_rgb(c,&cr,&cg,&cb);
+        gfx_disc_aa(cx,cy,r,cr,cg,cb);
+    } else {
+        for (int dy = -r; dy <= r; dy++)
+            for (int dx = -r; dx <= r; dx++)
+                if (dx*dx + dy*dy <= r*r)
+                    gfx_pixel_idx(cx + dx, cy + dy, c);
+    }
 }
 // 圆环 (内外半径)
 static void fring(int cx, int cy, int r, int t, uint8_t c) {
@@ -254,7 +273,7 @@ static void fring(int cx, int cy, int r, int t, uint8_t c) {
 }
 
 static void draw_icon(int kind, int x, int y) {
-    // 图标外框 26x20, 彩色底, 1px 描边
+    // 图标外框 26x20：扁平圆角卡片，适合 Launchpad 与桌面共用。
     uint8_t bg = COL_ACCENT;
     switch (kind) {
         case 0: bg = COL_ACCENT_SOFT; break;   // 关于
@@ -270,12 +289,8 @@ static void draw_icon(int kind, int x, int y) {
         case 10: bg = COL_YELLOW;      break;   // 文件管理器
         case 11: bg = COL_DGRAY;       break;   // 磁盘工具
     }
-    fill_square(x, y, 26, 20, bg);
-    // 3D 立体边框: 顶/左高光 + 底/右阴影 (替代平面描边, 提升质感)
-    fill(x, y, x + 25, y, COL_TASKBAR);
-    fill(x, y, x, y + 19, COL_TASKBAR);
-    fill(x, y + 19, x + 25, y + 19, COL_SHADOW);
-    fill(x + 25, y, x + 25, y + 19, COL_SHADOW);
+    fill_round(x, y, x + 25, y + 19, RADIUS_CTRL, bg);
+    rect_round(x, y, x + 25, y + 19, RADIUS_CTRL, COL_WHITE);
     int cx = x + 13, cy = y + 10;
 
     if (kind == 0) {
@@ -369,9 +384,9 @@ static void draw_icon(int kind, int x, int y) {
 static void d_about(int x, int y, int w, int h) {
     (void)w; (void)h;
     txt(x + 6, y + 6,  "FSOS（自由安全操作系统）", COL_ACCENT, COL_WHITE);
-    txt(x + 6, y + 22, "Windows 风格中文桌面", COL_SHADOW, COL_WHITE);
+    txt(x + 6, y + 22, "Aurora 轻量中文桌面", COL_SHADOW, COL_WHITE);
     txt(x + 6, y + 38, "双击图标打开窗口", COL_SHADOW, COL_WHITE);
-    txt(x + 6, y + 54, "左下角开始菜单启动应用", COL_SHADOW, COL_WHITE);
+    txt(x + 6, y + 54, "底部 Dock 打开应用程序", COL_SHADOW, COL_WHITE);
     txt(x + 6, y + 70, "ESC 退出桌面  F1 快捷键", COL_LGRAY, COL_WHITE);
 }
 
@@ -441,7 +456,7 @@ static void d_settings(int x, int y, int w, int h) {
     (void)w; (void)h;
     txt(x + 6, y + 6,  "系统设置", COL_ACCENT, COL_WHITE);
     txt(x + 6, y + 22, "当前版本: FSOS 演示版", COL_SHADOW, COL_WHITE);
-    txt(x + 6, y + 38, "主题: 晴空蓝 (明亮)", COL_SHADOW, COL_WHITE);
+    txt(x + 6, y + 38, "主题: Aurora (夜色)", COL_SHADOW, COL_WHITE);
     txt(x + 6, y + 54, "后续可在此调整", COL_SHADOW, COL_WHITE);
     txt(x + 6, y + 70, "壁纸、语言、日期等", COL_SHADOW, COL_WHITE);
     txt(x + 6, y + 90, "按 Win+T 或点击终端图标", COL_SHADOW, COL_WHITE);
@@ -505,56 +520,57 @@ static void rtc_update(void) {
 // 按钮区域 (从左到右): 最小化 最大化 关闭
 static int win_btn_x(app_t* a, int btn) {
     // btn: 0=close, 1=max, 2=min
-    int right = a->x + a->w - 3;
-    if (btn == 0) return right - 12;
-    if (btn == 1) return right - 12 - 3 - 12;
-    return right - 12 - 3 - 12 - 3 - 12;
+    (void)a;
+    // macOS 风格的左上三色控制点。逻辑编号保持不变，避免影响现有鼠标行为。
+    return a->x + 6 + btn * 15;
 }
 
 static void draw_window(app_t* a, int focused) {
     int x = a->x, y = a->y, w = a->w, h = a->h;
     uint8_t border = focused ? COL_ACCENT : COL_SHADOW;
-    uint8_t tbg    = focused ? COL_ACCENT : COL_SHADOW;
+    uint8_t tbg    = focused ? COL_UI_TITLE_SOFT : COL_PANEL;
 
-    // 窗口阴影 (1px 偏移, 仅在未最大化时)
+    // 窗口阴影分层 (modern_ui: 聚焦 2px 强, 非聚焦 1px 弱, 最大化无阴影)
     if (!a->maximized) {
-        fill(x + 2, y + h, x + w + 1, y + h + 1, COL_SHADOW);
-        fill(x + w, y + 2, x + w + 1, y + h + 1, COL_SHADOW);
+        int off = focused ? SHADOW_OFF : 1;
+        fill(x + off, y + h, x + w + off - 1, y + h + off - 1, SHADOW_COL);
+        fill(x + w, y + off, x + w + off - 1, y + h + off - 1, SHADOW_COL);
     }
 
-    // 客户区背景
-    fill(x, y, x + w - 1, y + h - 1, COL_WHITE);
-    rect(x, y, x + w - 1, y + h - 1, border);
+    // 客户区背景 (ui_polish: 圆角外框, 最大化退化直角)
+    int rw = a->maximized ? 0 : RADIUS_WINDOW;
+    fill_round(x, y, x + w - 1, y + h - 1, rw, COL_WHITE);
+    rect_round(x, y, x + w - 1, y + h - 1, rw, border);
 
-    // 标题栏
-    fill(x + 1, y + 1, x + w - 2, y + TITLE_H - 2, tbg);
-    txt(x + 6, y + 2, a->name, COL_WHITE, tbg);
+    // 标题栏 (ui_polish: 圆角 RADIUS_CTRL)
+    fill_round(x + 1, y + 1, x + w - 2, y + TITLE_H - 2, RADIUS_CTRL, tbg);
+    txt(x + 54, y + 1, a->name, focused ? COL_WHITE : COL_SHADOW, tbg);
 
-    // 按钮
+    // 按钮 (ui_polish: 圆角 RADIUS_CTRL, 可点击区域尺寸不变)
     for (int b = 2; b >= 0; b--) {
         int bx = win_btn_x(a, b);
-        int by = y + 2;
-        fill(bx, by, bx + 11, by + 10, tbg);
-        rect(bx, by, bx + 11, by + 10, COL_WHITE);
+        int by = y + 3;
+        uint8_t dot = (b == 0) ? COL_LRED : (b == 1 ? COL_YELLOW : COL_LGREEN);
+        fcircle(bx + 5, by + 5, 5, dot);
         if (b == 2) {
             // 最小化: 底横线
-            fill(bx + 3, by + 7, bx + 8, by + 8, COL_WHITE);
+            fill(bx + 3, by + 6, bx + 8, by + 6, COL_SHADOW);
         } else if (b == 1) {
             // 最大化/还原: 小方框
             int sq = a->maximized ? 1 : 0;
             if (sq) {
                 // 还原符号: 两个重叠方块
-                fill(bx + 3, by + 3, bx + 6, by + 6, COL_WHITE);
-                rect(bx + 5, by + 5, bx + 9, by + 9, COL_WHITE);
+                fill(bx + 3, by + 3, bx + 6, by + 6, COL_SHADOW);
+                rect(bx + 5, by + 5, bx + 9, by + 9, COL_SHADOW);
             } else {
-                fill(bx + 3, by + 3, bx + 8, by + 8, COL_WHITE);
-                rect(bx + 3, by + 3, bx + 8, by + 8, tbg); // 内部镂空
+                fill(bx + 3, by + 3, bx + 8, by + 8, COL_SHADOW);
+                rect(bx + 3, by + 3, bx + 8, by + 8, dot); // 内部镂空
             }
         } else {
             // 关闭 X
             for (int i = 2; i <= 8; i++) {
-                gfx_pixel_idx(bx + i, by + i, COL_WHITE);
-                gfx_pixel_idx(bx + i, by + 10 - i, COL_WHITE);
+                gfx_pixel_idx(bx + i, by + i, COL_SHADOW);
+                gfx_pixel_idx(bx + i, by + 10 - i, COL_SHADOW);
             }
         }
     }
@@ -564,10 +580,44 @@ static void draw_window(app_t* a, int focused) {
 }
 
 // 命中窗口子区域. *what: 0=close 1=max/restore 2=min 3=title 4=client
+//
+// ui_polish: 圆角命中判定 —— 点在矩形包围盒外返回 0; 点在四角外侧空白
+// 三角区返回 0; 否则返回 1。半径钳制与 gfx_fill_round_idx 一致, 保证命中与绘制几何相同。
+static int round_rect_hit(int mx, int my, int x, int y, int w, int h, int r) {
+    if (mx < x || my < y || mx >= x + w || my >= y + h) return 0;
+    int m = w < h ? w : h;
+    int cap = m / 4;
+    if (r > cap) r = cap;
+    if (r <= 0) return 1;
+    int xr = x + r, yb = y + r;          // 左上角内圆心
+    if (mx < xr && my < yb) {
+        int dx = xr - mx, dy = yb - my;
+        if (dx * dx + dy * dy > r * r) return 0;
+    }
+    int xrb = x + w - r, y1_ = y + r;    // 右上角内圆心
+    if (mx >= xrb && my < y1_) {
+        int dx = mx - xrb + 1, dy = y1_ - my;
+        if (dx * dx + dy * dy > r * r) return 0;
+    }
+    int x2_ = x + r, ybb = y + h - r;    // 左下角内圆心
+    if (mx < x2_ && my >= ybb) {
+        int dx = x2_ - mx, dy = my - ybb + 1;
+        if (dx * dx + dy * dy > r * r) return 0;
+    }
+    int xrb2 = x + w - r, ybb2 = y + h - r; // 右下角内圆心
+    if (mx >= xrb2 && my >= ybb2) {
+        int dx = mx - xrb2 + 1, dy = my - ybb2 + 1;
+        if (dx * dx + dy * dy > r * r) return 0;
+    }
+    return 1;
+}
+
 static int win_hit(app_t* a, int mx, int my, int* what) {
     int x = a->x, y = a->y, w = a->w, h = a->h;
     if (mx < x || mx >= x + w || my < y || my >= y + h) { *what = -1; return 0; }
-    if (my >= y + 2 && my <= y + 12) {
+    int r = a->maximized ? 0 : RADIUS_WINDOW;
+    if (!round_rect_hit(mx, my, x, y, w, h, r)) { *what = -1; return 0; }
+    if (my >= y + 3 && my <= y + 13) {
         int bx = win_btn_x(a, 0);
         if (mx >= bx && mx <= bx + 11) { *what = 0; return 1; }
         bx = win_btn_x(a, 1);
@@ -636,19 +686,19 @@ static void hk_linux_test(void) {
 }
 
 static const hotkey_t g_hotkeys[] = {
-    { KB_MOD_GUI,             KEY_WIN, "Win           打开/关闭开始菜单",   hk_toggle_start },
-    { KB_MOD_ALT,             KEY_TAB, "Alt+Tab       切换下一个窗口",      hk_next_win },
-    { KB_MOD_ALT|KB_MOD_SHIFT,KEY_TAB, "Alt+Shift+Tab 切换上一个窗口",      hk_prev_win },
-    { KB_MOD_GUI,            'd',     "Win+D         显示桌面(最小化全部)", hk_show_desktop },
-    { KB_MOD_GUI,            't',     "Win+T         打开终端",            hk_terminal },
-    { KB_MOD_GUI,            'r',     "Win+R         运行(打开终端)",      hk_terminal },
-    { KB_MOD_GUI,            'e',     "Win+E         打开设置",            hk_settings },
-    { KB_MOD_GUI,            'l',     "Win+L         注销",                hk_logoff },
-    { KB_MOD_CTRL|KB_MOD_ALT,'t',     "Ctrl+Alt+T    打开终端 (Linux 习惯)", hk_terminal },
-    { KB_MOD_CTRL|KB_MOD_ALT,KEY_DEL, "Ctrl+Alt+Del  任务管理器",           hk_taskmgr },
-    { KB_MOD_CTRL|KB_MOD_ALT,'l',     "Ctrl+Alt+L    运行 Linux 程序(HELLO.ELF)", hk_linux_test },
-    { KB_MOD_ALT,            KEY_F4,  "Alt+F4        关闭当前窗口",        hk_close_win },
-    { 0,                      KEY_F1, "F1            快捷键帮助",           hk_help },
+    { KB_MOD_GUI,             KEY_WIN, "Win 开始菜单",   hk_toggle_start },
+    { KB_MOD_ALT,             KEY_TAB, "Alt+Tab 切换窗口",      hk_next_win },
+    { KB_MOD_ALT|KB_MOD_SHIFT,KEY_TAB, "Shift+Tab 上一窗口",      hk_prev_win },
+    { KB_MOD_GUI,            'd',     "Win+D 显示桌面", hk_show_desktop },
+    { KB_MOD_GUI,            't',     "Win+T 终端",            hk_terminal },
+    { KB_MOD_GUI,            'r',     "Win+R 运行",      hk_terminal },
+    { KB_MOD_GUI,            'e',     "Win+E 设置",            hk_settings },
+    { KB_MOD_GUI,            'l',     "Win+L 注销",                hk_logoff },
+    { KB_MOD_CTRL|KB_MOD_ALT,'t',     "Ctrl+Alt+T 终端", hk_terminal },
+    { KB_MOD_CTRL|KB_MOD_ALT,KEY_DEL, "Ctrl+Alt+Del 任务",           hk_taskmgr },
+    { KB_MOD_CTRL|KB_MOD_ALT,'l',     "Ctrl+Alt+L Linux", hk_linux_test },
+    { KB_MOD_ALT,            KEY_F4,  "Alt+F4 关闭窗口",        hk_close_win },
+    { 0,                      KEY_F1, "F1 快捷键帮助",           hk_help },
 };
 #define NHK (sizeof(g_hotkeys)/sizeof(g_hotkeys[0]))
 
@@ -699,34 +749,38 @@ static int handle_hotkey(int k) {
 
 // F1 帮助覆盖层
 static void draw_help_overlay(void) {
-    int x0 = 16, y0 = 12, w = 288, h = 168;
-    fill(x0, y0, x0 + w - 1, y0 + h - 1, COL_TITLEBG);
-    rect(x0, y0, x0 + w - 1, y0 + h - 1, COL_ACCENT);
-    txt(x0 + 8, y0 + 6,  "快捷键", COL_YELLOW, COL_TITLEBG);
-    txt(x0 + 8, y0 + 20, "Windows 风格 + Linux 自由", COL_LGRAY, COL_TITLEBG);
-    int y = y0 + 36;
+    int x0 = 4, y0 = 4, w = 312, h = 184;
+    int colw = 152;
+    fill_round(x0, y0, x0 + w - 1, y0 + h - 1, RADIUS_PANEL, COL_TITLEBG);
+    rect_round(x0, y0, x0 + w - 1, y0 + h - 1, RADIUS_PANEL, COL_ACCENT);
+    txt(x0 + 8, y0 + 4,  "快捷键", COL_YELLOW, COL_TITLEBG);
+    txt(x0 + 8, y0 + 22, "Aurora 桌面快捷操作", COL_LGRAY, COL_TITLEBG);
+    int rows = ((int)NHK + 1) / 2;
+    int y = y0 + 42;
     for (int i = 0; i < (int)NHK; i++) {
-        txt(x0 + 8, y, g_hotkeys[i].label, COL_WHITE, COL_TITLEBG);
-        y += 12;
+        int col = i / rows;          // 0=左列, 1=右列
+        int r   = i % rows;
+        cjk_text(x0 + 8 + col * colw, y + r * 16, g_hotkeys[i].label,
+                 COL_WHITE, COL_TITLEBG);
     }
-    txt(x0 + 8, y0 + h - 14, "再按 F1 关闭", COL_LGREEN, COL_TITLEBG);
+    cjk_text(x0 + 8, y0 + h - 18, "再按 F1 关闭", COL_LGREEN, COL_TITLEBG);
 }
 
 // ============================================================
-// 开始菜单 (3x3 网格)
+// 应用程序面板（Launchpad 式网格）
 // ============================================================
-#define SM_TILE_W   64
-#define SM_TILE_H   44
-#define SM_COLS     4
-#define SM_TOP_H    14
+#define SM_TILE_W   62
+#define SM_TILE_H   40
+#define SM_COLS     5
+#define SM_TOP_H    18
 
 // 行数按菜单项数自动推导 (新增应用无需改这里)
 #define SM_ROWS     (((int)NSTART + SM_COLS - 1) / SM_COLS)
 
-static int sm_x0(void) { return 2; }
-static int sm_y0(void) { return TASKBAR_Y - (SM_TOP_H + SM_ROWS * SM_TILE_H); }
 static int sm_width(void) { return SM_COLS * SM_TILE_W + 4; }
 static int sm_height(void) { return SM_TOP_H + SM_ROWS * SM_TILE_H; }
+static int sm_x0(void) { return (SCREEN_W - sm_width()) / 2; }
+static int sm_y0(void) { return TASKBAR_Y - (SM_TOP_H + SM_ROWS * SM_TILE_H); }
 
 static void sm_item_rect(int i, int* rx, int* ry, int* rw, int* rh) {
     int c = i % SM_COLS;
@@ -741,25 +795,28 @@ static void draw_start_menu(int mx, int my) {
     int x0 = sm_x0(), y0 = sm_y0();
     int w = sm_width(), h = sm_height();
 
-    // 菜单面板 + 标题条
-    fill(x0, y0, x0 + w - 1, y0 + h - 1, COL_TASKBAR);
-    rect(x0, y0, x0 + w - 1, y0 + h - 1, COL_SHADOW);
-    fill(x0, y0, x0 + w - 1, y0 + SM_TOP_H - 1, COL_ACCENT);
-    txt(x0 + 8, y0 + 2, "开始", COL_WHITE, COL_ACCENT);
+    // 深色面板 + 系统色标题条。使用固定网格，不要求用户学习搜索或分类操作。
+    fill_round(x0, y0, x0 + w - 1, y0 + h - 1, RADIUS_PANEL, COL_TASKBAR);
+    rect_round(x0, y0, x0 + w - 1, y0 + h - 1, RADIUS_PANEL, COL_SHADOW);
+    fill_round(x0, y0, x0 + w - 1 - RADIUS_CTRL, y0 + SM_TOP_H - 1, RADIUS_CTRL, COL_ACCENT);
+    txt(x0 + 8, y0 + 1, "应用程序", COL_WHITE, COL_ACCENT);
+    txt(x0 + w - 38, y0 + 1, "FSOS", COL_WHITE, COL_ACCENT);
 
     for (int i = 0; i < (int)NSTART; i++) {
         int rx, ry, rw, rh;
         sm_item_rect(i, &rx, &ry, &rw, &rh);
         int hover = (mx >= rx && mx <= rx + rw && my >= ry && my <= ry + rh);
-        if (hover) fill(rx, ry, rx + rw, ry + rh, COL_ACCENT_SOFT);
+        if (hover) fill_round(rx, ry, rx + rw, ry + rh, RADIUS_CTRL, COL_UI_DOCK_HI_SOFT);
         // 图标居中
         int ix = rx + (rw - 26) / 2;
-        int iy = ry + 3;
+        int iy = ry + 2;
         draw_icon(g_start[i].kind, ix, iy);
-        // 标签居中
+        // 标签居中 (超宽则省略)
         int lw = cjk_text_w(g_start[i].label);
+        if (lw > rw - 2) lw = rw - 2;
         int lx = rx + (rw - lw) / 2;
-        txt(lx, ry + 27, g_start[i].label, hover ? COL_ACCENT : COL_SHADOW, hover ? COL_ACCENT_SOFT : COL_TASKBAR);
+        cjk_text_ellipsis(lx, ry + 22, g_start[i].label, lw,
+                          hover ? COL_ACCENT : COL_SHADOW, hover ? COL_ACCENT_SOFT : COL_TASKBAR);
     }
 }
 
@@ -767,8 +824,8 @@ static void draw_start_menu(int mx, int my) {
 // 桌面图标 (2 列 x 4 行)
 // ============================================================
 #define ICON_COLS   3
-#define ICON_X0     10
-#define ICON_COLW   96
+#define ICON_X0     16
+#define ICON_COLW   100
 #define ICON_TOP    12
 #define ICON_STEP   42
 
@@ -779,20 +836,23 @@ static void draw_icons(int mx, int my) {
     for (int i = 0; i < (int)NICON; i++) {
         int x = icon_x(i);
         int y = icon_y(i);
-        int hover = (mx >= x - 2 && mx <= x + 30 && my >= y - 2 && my <= y + 34);
+        int hover = (mx >= x - 2 && mx <= x + 31 && my >= y - 2 && my <= y + 39);
         int selected = (i == g_sel_icon);
 
-        // 选中/悬停高亮背景块
-        uint8_t hilite = selected ? COL_ACCENT : (hover ? COL_ACCENT_SOFT : COL_WALL_C);
-        fill(x - 2, y - 2, x + 30, y + 24, hilite);
+        // 选中/悬停高亮背景块 (ui_polish: 圆角 RADIUS_CTRL)
+        uint8_t hilite = selected ? COL_ACCENT_SOFT : (hover ? COL_UI_DOCK_HI_SOFT : COL_WALL_C);
+        fill_round(x - 2, y - 2, x + 31, y + 39, RADIUS_CTRL, hilite);
 
         // 图标
         draw_icon(g_icons[i].kind, x + 2, y);
 
-        // 标签 (居中)
+        // 标签 (居中, 超宽则省略)
         int lw = cjk_text_w(g_icons[i].label);
+        if (lw > ICON_COLW - 4) lw = ICON_COLW - 4;
         int lx = x + 15 - lw / 2;
-        txt(lx, y + 22, g_icons[i].label, COL_WHITE, hilite);
+        if (lx < 0) lx = 0;
+        if (lx + lw > SCREEN_W) lx = SCREEN_W - lw;
+        cjk_text_ellipsis(lx, y + 22, g_icons[i].label, lw, COL_WHITE, hilite);
     }
 }
 
@@ -800,34 +860,32 @@ static int icon_hit(int mx, int my) {
     for (int i = 0; i < (int)NICON; i++) {
         int x = icon_x(i);
         int y = icon_y(i);
-        if (mx >= x - 2 && mx <= x + 30 && my >= y - 2 && my <= y + 34)
+        if (mx >= x - 2 && mx <= x + 31 && my >= y - 2 && my <= y + 39)
             return i;
     }
     return -1;
 }
 
 // ============================================================
-// 任务栏
+// 悬浮 Dock
 // ============================================================
 static void draw_taskbar(int mx, int my) {
     int y = TASKBAR_Y;
-    fill(0, y, SCREEN_W - 1, SCREEN_H - 1, COL_TASKBAR);
-    // 顶部细线
-    fill(0, y, SCREEN_W - 1, y, COL_SHADOW);
-    fill(0, y + 1, SCREEN_W - 1, y + 1, COL_ACCENT);
+    // 不再铺满屏幕底部；保留壁纸，绘制可辨识的悬浮 Dock。
+    fill_round(2, y + 1, SCREEN_W - 3, SCREEN_H - 2, RADIUS_PANEL, COL_TASKBAR);
+    rect_round(2, y + 1, SCREEN_W - 3, SCREEN_H - 2, RADIUS_PANEL, COL_SHADOW);
 
-    // 开始按钮 (FSOS 四色小徽标)
-    int sbx = 4, sbw = 32;
+    // 应用启动器：九点网格，兼顾 macOS Launchpad 与 Windows 的开始入口。
+    int sbx = 6, sbw = 32;
     int sbhover = (my >= y + 2 && my <= SCREEN_H - 2 && mx >= sbx && mx <= sbx + sbw);
-    uint8_t sbbg = (g_start_open || sbhover) ? COL_ACCENT_SOFT : COL_WHITE;
-    fill(sbx, y + 2, sbx + sbw, SCREEN_H - 2, sbbg);
-    rect(sbx, y + 2, sbx + sbw, SCREEN_H - 2, COL_SHADOW);
-    // 四色方块徽标
-    int ix = sbx + 8, iy = y + 4;
-    fill(ix,     iy,     ix + 6,  iy + 6,  COL_LRED);
-    fill(ix + 7, iy,     ix + 13, iy + 6,  COL_LGREEN);
-    fill(ix,     iy + 7, ix + 6,  iy + 13, COL_YELLOW);
-    fill(ix + 7, iy + 7, ix + 13, iy + 13, COL_ACCENT);
+    uint8_t sbbg = (g_start_open || sbhover) ? COL_UI_DOCK_HI_SOFT : COL_TASKBAR;
+    fill_round(sbx, y + 2, sbx + sbw, SCREEN_H - 2, RADIUS_CTRL, sbbg);
+    rect_round(sbx, y + 2, sbx + sbw, SCREEN_H - 2, RADIUS_CTRL, COL_TASK_HI);
+    int ix = sbx + 11, iy = y + 5;
+    for (int gy = 0; gy < 3; gy++)
+        for (int gx = 0; gx < 3; gx++)
+            fcircle(ix + gx * 5, iy + gy * 4, 1,
+                    (g_start_open || sbhover) ? COL_WHITE : COL_TASK_HI);
 
     // 已开窗口按钮
     int bx = sbx + sbw + 6;
@@ -837,10 +895,13 @@ static void draw_taskbar(int mx, int my) {
         int bw = cjk_text_w(a->name) + 14;
         int bhover = (my >= y + 2 && my <= SCREEN_H - 2 && mx >= bx && mx <= bx + bw);
         uint8_t bg = (g_focus == i && !a->minimized) ? COL_ACCENT :
-                     (bhover ? COL_ACCENT_SOFT : COL_WHITE);
-        fill(bx, y + 2, bx + bw, SCREEN_H - 2, bg);
-        rect(bx, y + 2, bx + bw, SCREEN_H - 2, COL_SHADOW);
-        txt(bx + 6, y + 3, a->name, (bg == COL_ACCENT) ? COL_WHITE : COL_SHADOW, bg);
+                     (bhover ? COL_UI_DOCK_HI_SOFT : COL_TASKBAR);
+        fill_round(bx, y + 2, bx + bw, SCREEN_H - 2, RADIUS_CTRL, bg);
+        rect_round(bx, y + 2, bx + bw, SCREEN_H - 2, RADIUS_CTRL, COL_TASK_HI);
+        txt(bx + 6, y + 2, a->name, (bg == COL_ACCENT) ? COL_WHITE : COL_SHADOW, bg);
+        // Dock 的小圆点表示运行中；焦点窗口使用系统蓝，其他窗口使用中性灰。
+        fcircle(bx + bw / 2, SCREEN_H - 4, 1,
+                (g_focus == i && !a->minimized) ? COL_ACCENT : COL_TASK_HI);
         bx += bw + 4;
         if (bx > 250) break; // 防止覆盖时钟区
     }
@@ -858,29 +919,62 @@ static void draw_taskbar(int mx, int my) {
     }
     int cw = cjk_text_w(clk);
     int cx = SCREEN_W - 4 - cw;
-    txt(cx, y + 4, clk, COL_SHADOW, COL_TASKBAR);
+    fill_round(cx - 3, y + 2, cx + cw + 2, SCREEN_H - 2, RADIUS_CTRL, COL_TASKBAR);
+    rect_round(cx - 3, y + 2, cx + cw + 2, SCREEN_H - 2, RADIUS_CTRL, COL_TASK_HI);
+    txt(cx, y + 2, clk, COL_WHITE, COL_TASKBAR);
 }
 
 // ============================================================
 // 壁纸渐变
 // ============================================================
 static void draw_wallpaper(void) {
-    int h = TASKBAR_Y; // 184
+    int h = TASKBAR_Y;
+    if (!g_wallpaper_palette_ready && !gfx_is_lfb()) {
+        for (int i = 0; i < AURORA_WALLPAPER_COLORS; i++) {
+            const uint8_t* p = &aurora_wallpaper_palette[i * 3];
+            gfx_set_palette_rgb((uint8_t)(32 + i), p[0], p[1], p[2]);
+        }
+        // modern_ui: COL_UI_* 柔和扩展色 DAC 注入 (8bpp 下与 gfx_palette_ext 语义一致;
+        // gfx_set_palette_rgb 接收 8bit 后内部 >>2 还原 6bit DAC)
+        static const uint8_t ui_ext[6][3] = {
+            { 0x16 << 2, 0x28 << 2, 0x18 << 2 },   // 160 SOFT_OK
+            { 0x2A << 2, 0x1A << 2, 0x1A << 2 },   // 161 SOFT_ERR
+            { 0x2B << 2, 0x25 << 2, 0x18 << 2 },   // 162 SOFT_WARN
+            { 0x10 << 2, 0x1C << 2, 0x2F << 2 },   // 163 BG_SOFT
+            { 0x17 << 2, 0x23 << 2, 0x3B << 2 },   // 164 TITLE_SOFT
+            { 0x20 << 2, 0x2F << 2, 0x3F << 2 },   // 165 DOCK_HI_SOFT
+        };
+        for (int i = 0; i < 6; i++) {
+            gfx_set_palette_rgb((uint8_t)(COL_UI_BASE + i),
+                                ui_ext[i][0], ui_ext[i][1], ui_ext[i][2]);
+        }
+        g_wallpaper_palette_ready = 1;
+    }
+    // 位图原始比例正好是 mode13h 的 320x200；VBE 时按屏幕缩放。
     for (int yy = 0; yy < h; yy++) {
-        // 0..183 映射到 21..26 (6 色渐变)
-        int idx = 21 + (yy * 5 + h/2) / h;
-        if (idx > 26) idx = 26;
-        fill(0, yy, SCREEN_W - 1, yy, (uint8_t)idx);
+        int sy = yy * AURORA_WALLPAPER_HEIGHT / h;
+        for (int xx = 0; xx < SCREEN_W; xx++) {
+            int sx = xx * AURORA_WALLPAPER_W / SCREEN_W;
+            uint8_t ci = aurora_wallpaper_pixels[sy * AURORA_WALLPAPER_W + sx];
+            if (gfx_is_lfb()) {
+                const uint8_t* p = &aurora_wallpaper_palette[ci * 3];
+                gfx_pixel_rgb(xx, yy, p[0], p[1], p[2]);
+            } else {
+                gfx_pixel_idx(xx, yy, (uint8_t)(32 + ci));
+            }
+        }
     }
 }
 
 // 新手提示
 static void draw_tip(void) {
     if (!g_tip_visible) return;
-    int y = TASKBAR_Y - 22;
-    fill(4, y, 236, y + 16, COL_WALL_F);
-    rect(4, y, 236, y + 16, COL_ACCENT);
-    txt(8, y + 3, "双击图标打开窗口 · 左下角开始按钮启动更多应用", COL_WHITE, COL_WALL_F);
+    int y = TASKBAR_Y - 24 * THEME_SF;
+    int tw = SCREEN_W * 300 / 320;      // hires: 按屏幕宽度缩放提示框
+    fill_round(4, y, tw, y + 19 * THEME_SF, RADIUS_PANEL, COL_TITLEBG);
+    rect_round(4, y, tw, y + 19 * THEME_SF, RADIUS_PANEL, COL_ACCENT);
+    cjk_text_ellipsis(8, y + 1, "双击图标打开窗口 · 左下角开始按钮启动更多应用",
+                      tw - 12, COL_WHITE, COL_TITLEBG);
 }
 
 // ============================================================
@@ -899,12 +993,12 @@ static void wm_reboot(void) {
     for (;;) { __asm__ volatile("cli; hlt"); }
 }
 static int ctx_hit(int mx, int my) {
-    int w = 132, h = NCTX * 16 + 6;
+    int w = 132, h = NCTX * 18 + 4;
     int x = g_ctx_x, y = g_ctx_y;
     if (x + w > SCREEN_W) x = SCREEN_W - w;
     if (y + h > SCREEN_H) y = SCREEN_H - h;
     if (mx < x || mx > x + w || my < y || my > y + h) return -1;
-    int i = (my - (y + 4)) / 16;
+    int i = (my - (y + 2)) / 18;
     if (i < 0 || i >= (int)NCTX) return -1;
     return i;
 }
@@ -918,21 +1012,45 @@ static void ctx_execute(int idx) {
     launch(act);                             // 终端 / 编辑器 / 关于
 }
 static void draw_context_menu(int mx, int my) {
-    int w = 132, h = NCTX * 16 + 6;
+    int w = 132, h = NCTX * 18 + 4;
     int x = g_ctx_x, y = g_ctx_y;
     if (x + w > SCREEN_W) x = SCREEN_W - w;
     if (y + h > SCREEN_H) y = SCREEN_H - h;
-    gfx_fill_idx(x, y, x + w, y + h, COL_LGRAY);
-    gfx_rect_idx(x + 1, y + 1, x + w - 1, y + h - 1, COL_DGRAY);
+    fill_round(x, y, x + w, y + h, RADIUS_PANEL, COL_LGRAY);
+    rect_round(x + 1, y + 1, x + w - 1, y + h - 1, RADIUS_PANEL, COL_DGRAY);
     for (int i = 0; i < (int)NCTX; i++) {
-        int iy = y + 4 + i * 16;
-        int hover = (mx >= x && mx <= x + w && my >= iy && my <= iy + 15);
+        int iy = y + 2 + i * 18;
+        int hover = (mx >= x && mx <= x + w && my >= iy && my <= iy + 17);
         if (hover) {
-            gfx_fill_idx(x + 2, iy, x + w - 2, iy + 15, COL_BLUE);
-            cjk_text(x + 6, iy + 3, g_ctx[i].label, COL_WHITE, COL_BLUE);
+            fill_round(x + 2, iy, x + w - 2, iy + 17, RADIUS_CTRL, COL_BLUE);
+            cjk_text(x + 6, iy + 1, g_ctx[i].label, COL_WHITE, COL_BLUE);
         } else {
-            cjk_text(x + 6, iy + 3, g_ctx[i].label, COL_BLACK, COL_LGRAY);
+            cjk_text(x + 6, iy + 1, g_ctx[i].label, COL_BLACK, COL_LGRAY);
         }
+    }
+}
+
+// ============================================================
+// hires: 根据实际分辨率调整窗口初始几何 (比例缩放, 320x200 下不变)
+// ============================================================
+static void wm_layout_init(void) {
+    static const int base[8][4] = {
+        {  8,  8, 204, 112},  // 关于
+        {126, 16, 184, 140},  // 用户
+        {146, 56, 148, 108},  // 时钟
+        { 44,  8, 196, 152},  // 设置
+        {  6,  6, 308, 170},  // 开发
+        {  6,  6, 308, 170},  // 编辑器
+        {  6,  6, 308, 170},  // 文件管理器
+        {  6,  6, 308, 170},  // 磁盘工具
+    };
+    for (int i = 0; i < NAPP; i++) {
+        int x = base[i][0] * SCREEN_W / 320;
+        int y = base[i][1] * SCREEN_H / 200;
+        int w = base[i][2] * SCREEN_W / 320;
+        int h = base[i][3] * SCREEN_H / 200;
+        g_app[i].x = x;  g_app[i].y = y;  g_app[i].w = w;  g_app[i].h = h;
+        g_app[i].ox = x; g_app[i].oy = y; g_app[i].ow = w; g_app[i].oh = h;
     }
 }
 
@@ -942,6 +1060,9 @@ static void draw_context_menu(int mx, int my) {
 void wm_demo_run(void) {
     (void)g_gfx_inited;
 
+    // hires: 按实际分辨率调整窗口初始几何
+    wm_layout_init();
+
     // 复位桌面状态
     for (int i = 0; i < NAPP; i++) {
         g_app[i].z = (i == 0) ? 1 : 0;
@@ -949,7 +1070,7 @@ void wm_demo_run(void) {
     }
     g_maxz = 1; g_focus = 0; g_drag = -1;
     g_start_open = 0; g_sel_icon = -1; g_last_click_icon = -1;
-    g_show_help = 0; g_wm_skip = 0; g_wm_quit = 0;
+    g_show_help = 0; g_wm_skip = 0; g_wm_quit = 0; g_wallpaper_palette_ready = 0;
     g_tip_visible = 1;
     g_tip_until = get_ticks() + 8000;
 
@@ -1037,11 +1158,11 @@ void wm_demo_run(void) {
                 }
             } else {
                 // 2) 任务栏
-                int on_start = (mx >= 4 && mx <= 4 + 32 && my >= TASKBAR_Y + 2 && my <= SCREEN_H - 2);
+                int on_start = (mx >= 6 && mx <= 6 + 32 && my >= TASKBAR_Y + 2 && my <= SCREEN_H - 2);
                 if (on_start) {
                     g_start_open = 1;
                 } else if (my >= TASKBAR_Y) {
-                    int bx = 4 + 32 + 6;
+                    int bx = 6 + 32 + 6;
                     for (int i = 0; i < NAPP; i++) {
                         app_t* a = &g_app[i];
                         if (!a->open) continue;
@@ -1076,7 +1197,7 @@ void wm_demo_run(void) {
                                 a->maximized = 0;
                             } else {
                                 a->ox = a->x; a->oy = a->y; a->ow = a->w; a->oh = a->h;
-                                a->x = 2; a->y = 2; a->w = 316; a->h = 180;
+                                a->x = 2; a->y = 2; a->w = 316; a->h = 176;
                                 a->maximized = 1;
                             }
                         } else if (hit_what == 2) {     // 最小化

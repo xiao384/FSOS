@@ -3,6 +3,7 @@
 // VBE 640x480, 8x8 字体 => 80x60 字符, 文本区 80x58 (顶部 14px 标题栏)
 #include "terminal.h"
 #include "vga.h"
+#include "theme.h"      // hires: TITLE_H, THEME_SF
 #include "kb.h"
 #include "user.h"
 #include "io.h"
@@ -150,9 +151,10 @@ static void draw_input_row(int row) {
 static void term_draw(void) {
     vga_clear(COL_BLACK);
 
-    // 顶部标题栏
-    vga_fill_rect(0, 0, VGA_W - 1, 13, COL_TITLEBG);
-    vga_draw_rect(0, 0, VGA_W - 1, 13, COL_LBLUE);
+    // 顶部标题栏 (hires: 高度随 THEME_SF 缩放)
+    int th = 13 * THEME_SF;   // 320x200: 13, 1920x1080: 26
+    vga_fill_rect(0, 0, VGA_W - 1, th, COL_TITLEBG);
+    vga_draw_rect(0, 0, VGA_W - 1, th, COL_LBLUE);
     vga_draw_text(4, 3, "FSOS Terminal", COL_WHITE, COL_TITLEBG);
     const char* right = "root (admin)";
     int rw = vga_text_w(right);
@@ -182,15 +184,16 @@ static void term_draw(void) {
         const char* cand = pinyin_get_candidates();
         const char* compose = pinyin_get_compose();
         if (compose[0]) {
-            int cy = 14 + (TERM_ROWS - 2) * 8;
-            vga_fill_rect(0, cy, VGA_W - 1, cy + 7, COL_DGRAY);
+            // 16px 高的输入法提示带 (汉字 16px, 条带向上抬 8px 以容纳)
+            int cy = 14 + (TERM_ROWS - 2) * 8 - 8;
+            vga_fill_rect(0, cy, VGA_W - 1, cy + 15, COL_DGRAY);
             char buf[16];
             buf[0] = '[';
             int p = 1;
             for (int i = 0; compose[i] && p < 14; i++) buf[p++] = compose[i];
             buf[p++] = ']';
             buf[p] = 0;
-            vga_draw_text(2, cy, buf, COL_YELLOW, COL_DGRAY);
+            vga_draw_text(2, cy + 4, buf, COL_YELLOW, COL_DGRAY);
             if (cand[0]) {
                 cjk_text(2 + 80, cy, cand, COL_WHITE, COL_DGRAY);
             }

@@ -1,6 +1,7 @@
 // app.c - 应用界面: 登录 / 主界面 / 用户管理
 #include "app.h"
 #include "vga.h"
+#include "cjk.h"        // ui_polish: 中文文案绘制
 #include "gui.h"
 #include "kb.h"
 #include "user.h"
@@ -10,6 +11,10 @@
 #include "desktop.h"
 #include "icon.h"
 #include "perm.h"       // 有效身份: 登录后切换为所登录用户角色
+
+// hires: 比例缩放宏 (320x200 基准, 高分辨率下按比例放大)
+#define SX(x) ((x) * VGA_W / 320)
+#define SY(y) ((y) * SCREEN_H / 200)
 
 // ============================================================
 // 自动登录演示模式 (便于直接查看桌面 UI)
@@ -32,12 +37,12 @@ static const char* role_str(uint8_t role) {
 // 登录界面
 // ============================================================
 static void draw_login_list(int sel, int state, int passlen,
-                            const char* msg) {
-    vga_clear(COL_BLUE);
-    gui_title_bar("FSOS Login", "v0.2");
+                             const char* msg) {
+    vga_clear(COL_UI_BG_SOFT);
+    gui_title_bar("FSOS 登录", "v0.2");
 
     // 左侧用户列表
-    vga_draw_text(10, 18, "Select User:", COL_LGRAY, COL_BLUE);
+    cjk_text(10, 14, "选择用户：", COL_LGRAY, COL_UI_BG_SOFT);
     int cnt = user_count();
     for (int i = 0; i < cnt && i < 8; i++) {
         const UserRec* u = user_get(i);
@@ -50,30 +55,30 @@ static void draw_login_list(int sel, int state, int passlen,
     }
 
     // 右侧信息面板
-    vga_fill_rect(180, 18, 310, 150, COL_PANEL);
-    vga_draw_rect(180, 18, 310, 150, COL_LBLUE);
+    vga_fill_rect(SX(180), SY(18), SX(310), SY(150), COL_PANEL);
+    vga_draw_rect(SX(180), SY(18), SX(310), SY(150), COL_LBLUE);
     if (sel < cnt) {
         const UserRec* u = user_get(sel);
-        vga_draw_text(188, 26, "User:", COL_LGRAY, COL_PANEL);
+        cjk_text(188, 22, "用户：", COL_LGRAY, COL_PANEL);
         vga_draw_text(188, 38, u->name, COL_WHITE, COL_PANEL);
-        vga_draw_text(188, 52, "Role:", COL_LGRAY, COL_PANEL);
+        cjk_text(188, 48, "角色：", COL_LGRAY, COL_PANEL);
         vga_draw_text(188, 64, role_str(u->role), COL_YELLOW, COL_PANEL);
     }
 
     // 密码输入区
-    vga_draw_text(188, 86, "Password:", COL_LGRAY, COL_PANEL);
+    cjk_text(188, 82, "密码：", COL_LGRAY, COL_PANEL);
     if (state == 1) {
         char stars[16];
         for (int i = 0; i < passlen; i++) stars[i] = '*';
         stars[passlen] = '\0';
         gui_textbox(188, 100, 110, stars, passlen, 1);
     } else {
-        vga_draw_text(188, 104, "[ENTER] to input", COL_DGRAY, COL_PANEL);
+        cjk_text(188, 100, "[回车] 输入密码", COL_DGRAY, COL_PANEL);
     }
 
-    vga_draw_text(10, 176, "UP/DOWN select   ENTER confirm   ESC back",
-                  COL_LGRAY, COL_BLUE);
-    gui_status_bar(msg, msg[0] ? COL_YELLOW : COL_LGRAY);
+    cjk_text(10, 172, "上/下 选择   回车 确认   ESC 返回",
+             COL_LGRAY, COL_UI_BG_SOFT);
+    gui_status_bar(msg, msg[0] ? COL_UI_SOFT_WARN : COL_LGRAY);
 }
 
 static void screen_login(void) {
@@ -82,8 +87,8 @@ static void screen_login(void) {
     char pass[16];
     int passlen = 0;
 
-    const char* m0 = "Select a user, press ENTER to login";
-    const char* m1 = "Enter password, ENTER to confirm";
+    const char* m0 = "选择用户，按回车登录";
+    const char* m1 = "输入密码，回车确认";
 
     for (;;) {
         if (sel >= user_count()) sel = 0;
@@ -115,7 +120,7 @@ static void screen_login(void) {
                     return;
                 } else {
                     draw_login_list(sel, state, passlen, m1);
-                    gui_status_bar("WRONG PASSWORD", COL_LRED);
+                    gui_status_bar("密码错误", COL_UI_SOFT_ERR);
                     kb_wait();
                     state = 0;
                 }
@@ -137,26 +142,33 @@ static void screen_main(void) {
         if (!u) { g_session = -1; return; }
         perm_set_role(u->role);   // 跟踪当前有效身份
 
-        vga_clear(COL_BLUE);
+        vga_clear(COL_UI_BG_SOFT);
         gui_title_bar("FSOS", "v0.2");
         vga_fill_rect(20, 30, 300, 120, COL_PANEL);
         vga_draw_rect(20, 30, 300, 120, COL_LBLUE);
-        vga_draw_text_center(44, "WELCOME", COL_YELLOW, COL_PANEL);
+        {
+            const char* welcome = "欢迎";
+            int ww = cjk_text_w(welcome);
+            cjk_text((VGA_W - ww) / 2, SY(40), welcome, COL_YELLOW, COL_PANEL);
+        }
         vga_draw_text_center(58, u->name, COL_WHITE, COL_PANEL);
-        vga_draw_text_center(72, "Role: ", COL_LGRAY, COL_PANEL);
-        int rw = vga_text_w("Role: ");
-        vga_draw_text((VGA_W - rw) / 2 + rw, 72, role_str(u->role), COL_YELLOW, COL_PANEL);
+        {
+            const char* role_lbl = "角色：";
+            int rw = cjk_text_w(role_lbl);
+            cjk_text((VGA_W - rw) / 2, 68, role_lbl, COL_LGRAY, COL_PANEL);
+            vga_draw_text((VGA_W - rw) / 2 + rw, 72, role_str(u->role), COL_YELLOW, COL_PANEL);
+        }
 
         // ---- 应用图标网格 (3 列 x 2 行) ----
         {
             struct mi { int key; int icon; const char* name; const char* label; };
             static const struct mi items[] = {
-                {'T', ICON_TERMINAL, "ic_t", "Terminal"},
-                {'M', ICON_USERMGR,  "ic_m", "Users"},
-                {'G', ICON_DESKTOP,  "ic_g", "Desktop"},
-                {'D', ICON_DESKTOP,  "ic_d", "Desktop++"},
-                {'K', ICON_TASKMGR,  "ic_k", "Tasks"},
-                {'L', ICON_LOCK,     "ic_l", "Lock"},
+                {'T', ICON_TERMINAL, "ic_t", "终端"},
+                {'M', ICON_USERMGR,  "ic_m", "用户管理"},
+                {'G', ICON_DESKTOP,  "ic_g", "桌面"},
+                {'D', ICON_DESKTOP,  "ic_d", "桌面++"},
+                {'K', ICON_TASKMGR,  "ic_k", "任务管理"},
+                {'L', ICON_LOCK,     "ic_l", "锁定"},
             };
             int col_w = VGA_W / 3;
             int y0 = SCREEN_H / 2 - 20;      // 图标区起始 y (动态居中)
@@ -165,16 +177,16 @@ static void screen_main(void) {
                 int ix = col_w * col + (col_w - ICON_SIZE) / 2;
                 int iy = y0 + row * (ICON_SIZE + 28);
                 icon_draw_auto(items[i].name, items[i].icon, ix, iy);
-                int lw = vga_text_w(items[i].label);
-                vga_draw_text(ix + (ICON_SIZE - lw) / 2, iy + ICON_SIZE + 2,
-                              items[i].label, COL_WHITE, COL_BLUE);
+                int lw = cjk_text_w(items[i].label);
+                cjk_text(ix + (ICON_SIZE - lw) / 2, iy + ICON_SIZE - 2,
+                         items[i].label, COL_WHITE, COL_UI_BG_SOFT);
                 char kh[4] = {'[', (char)items[i].key, ']', 0};
                 int kw = vga_text_w(kh);
                 vga_draw_text(ix + (ICON_SIZE - kw) / 2, iy + ICON_SIZE + 12,
-                              kh, COL_YELLOW, COL_BLUE);
+                              kh, COL_YELLOW, COL_UI_BG_SOFT);
             }
         }
-        gui_status_bar(msg, msg[0] ? COL_YELLOW : COL_LGRAY);
+        gui_status_bar(msg, msg[0] ? COL_UI_SOFT_WARN : COL_LGRAY);
 
         int k = kb_wait();
         msg[0] = '\0';
@@ -189,7 +201,7 @@ static void screen_main(void) {
                 screen_admin();
             } else {
                 msg[0] = '\0';
-                gui_status_bar("NO PERMISSION: admin only", COL_LRED);
+                gui_status_bar("无权限：仅管理员", COL_UI_SOFT_ERR);
                 kb_wait();
             }
         } else if (k == 'k' || k == 'K') {
@@ -205,10 +217,10 @@ static void screen_main(void) {
 // 用户管理界面 (admin)
 // ============================================================
 static void draw_admin_list(int sel) {
-    vga_clear(COL_BLUE);
-    gui_title_bar("User Manager", "admin");
+    vga_clear(COL_UI_BG_SOFT);
+    gui_title_bar("用户管理", "admin");
 
-    vga_draw_text(10, 18, "Users:", COL_LGRAY, COL_BLUE);
+    cjk_text(10, 14, "用户列表：", COL_LGRAY, COL_UI_BG_SOFT);
     int cnt = user_count();
     for (int i = 0; i < cnt && i < 9; i++) {
         const UserRec* u = user_get(i);
@@ -222,23 +234,23 @@ static void draw_admin_list(int sel) {
         for (int c = 0; u->name[c] && j < 20; c++) line[j++] = u->name[c];
         line[j] = '\0';
         vga_draw_text(14, y + 3, line, COL_WHITE, bg);
-        vga_draw_text(150, y + 3, role_str(u->role),
+        vga_draw_text(SX(150), y + 3, role_str(u->role),
                       (i == sel) ? COL_YELLOW : COL_LGRAY, bg);
     }
 
     // 右侧信息
-    vga_fill_rect(200, 18, 310, 150, COL_PANEL);
-    vga_draw_rect(200, 18, 310, 150, COL_LBLUE);
+    vga_fill_rect(SX(200), SY(18), SX(310), SY(150), COL_PANEL);
+    vga_draw_rect(SX(200), SY(18), SX(310), SY(150), COL_LBLUE);
     if (sel < cnt) {
         const UserRec* u = user_get(sel);
-        vga_draw_text(206, 26, "Selected:", COL_LGRAY, COL_PANEL);
+        cjk_text(206, 22, "已选：", COL_LGRAY, COL_PANEL);
         vga_draw_text(206, 38, u->name, COL_WHITE, COL_PANEL);
-        vga_draw_text(206, 52, "Role:", COL_LGRAY, COL_PANEL);
+        cjk_text(206, 48, "角色：", COL_LGRAY, COL_PANEL);
         vga_draw_text(206, 64, role_str(u->role), COL_YELLOW, COL_PANEL);
     }
 
-    vga_draw_text(10, 176, "UP/DOWN sel   A:add E:edit D:del L:logout",
-                  COL_LGRAY, COL_BLUE);
+    cjk_text(10, 172, "上/下 选 A:增 E:改 D:删 L:注销",
+             COL_LGRAY, COL_UI_BG_SOFT);
 }
 
 // 添加用户对话框
@@ -246,23 +258,23 @@ static void screen_admin_add(void) {
     char name[16], pass[16], rolec[2];
     int nlen = 0, plen = 0, rlen = 0;
     DialogField fields[3];
-    fields[0].label = "Username:"; fields[0].buf = name; fields[0].len = &nlen;
+    fields[0].label = "用户名："; fields[0].buf = name; fields[0].len = &nlen;
     fields[0].max = 14; fields[0].secret = 0;
-    fields[1].label = "Password:"; fields[1].buf = pass; fields[1].len = &plen;
+    fields[1].label = "密码："; fields[1].buf = pass; fields[1].len = &plen;
     fields[1].max = 14; fields[1].secret = 1;
-    fields[2].label = "Admin(1/0):"; fields[2].buf = rolec; fields[2].len = &rlen;
+    fields[2].label = "管理员(1/0):"; fields[2].buf = rolec; fields[2].len = &rlen;
     fields[2].max = 1; fields[2].secret = 0;
 
-    if (gui_dialog_form("Add User", fields, 3, "OK", "Cancel")) {
+    if (gui_dialog_form("添加用户", fields, 3, "确定", "取消")) {
         uint8_t role = (rlen > 0 && rolec[0] == '1') ? ROLE_ADMIN : ROLE_NORMAL;
         int r = user_add(name, pass, role);
         if (r == 0) {
             user_save();
-            gui_status_bar("User added & saved", COL_LGREEN);
+            gui_status_bar("已添加并保存", COL_UI_SOFT_OK);
         } else if (r == -2) {
-            gui_status_bar("ERROR: name already exists", COL_LRED);
+            gui_status_bar("错误：用户名已存在", COL_UI_SOFT_ERR);
         } else {
-            gui_status_bar("ERROR: cannot add", COL_LRED);
+            gui_status_bar("错误：无法添加", COL_UI_SOFT_ERR);
         }
         kb_wait();
     }
@@ -283,23 +295,23 @@ static void screen_admin_edit(int sel) {
     rlen = 1;
 
     DialogField fields[3];
-    fields[0].label = "Username:"; fields[0].buf = name; fields[0].len = &nlen;
+    fields[0].label = "用户名："; fields[0].buf = name; fields[0].len = &nlen;
     fields[0].max = 14; fields[0].secret = 0;
-    fields[1].label = "Password:"; fields[1].buf = pass; fields[1].len = &plen;
+    fields[1].label = "密码："; fields[1].buf = pass; fields[1].len = &plen;
     fields[1].max = 14; fields[1].secret = 1;
-    fields[2].label = "Admin(1/0):"; fields[2].buf = rolec; fields[2].len = &rlen;
+    fields[2].label = "管理员(1/0):"; fields[2].buf = rolec; fields[2].len = &rlen;
     fields[2].max = 1; fields[2].secret = 0;
 
-    if (gui_dialog_form("Edit User", fields, 3, "OK", "Cancel")) {
+    if (gui_dialog_form("编辑用户", fields, 3, "确定", "取消")) {
         if (user_rename(sel, name) == 0) {
             user_setpass(sel, pass);
             uint8_t role = (rlen > 0 && rolec[0] == '1') ? ROLE_ADMIN : ROLE_NORMAL;
             // 若用户降级且是当前登录用户, 保持其会话但注意: 这里仅保存
             user_setrole(sel, role);
             user_save();
-            gui_status_bar("User updated & saved", COL_LGREEN);
+            gui_status_bar("已更新并保存", COL_UI_SOFT_OK);
         } else {
-            gui_status_bar("ERROR: name invalid/duplicate", COL_LRED);
+            gui_status_bar("错误：用户名无效或重复", COL_UI_SOFT_ERR);
         }
         kb_wait();
     }
@@ -320,20 +332,20 @@ static void screen_admin(void) {
         else if (k == 'd' || k == 'D') {
             const UserRec* du = user_get(sel);
             if (user_count() <= 1) {
-                gui_status_bar("ERROR: at least 1 user required", COL_LRED);
+                gui_status_bar("错误：至少需保留 1 个用户", COL_UI_SOFT_ERR);
                 kb_wait();
-            } else if (du && gui_dialog_confirm("Delete User",
+            } else if (du && gui_dialog_confirm("删除用户",
                                                 du->name,
-                                                "Delete", "Cancel")) {
+                                                "删除", "取消")) {
                 int r = user_remove(sel);
                 if (r == 0) {
                     user_save();
                     if (sel >= user_count()) sel = user_count() - 1;
-                    gui_status_bar("User deleted & saved", COL_LGREEN);
+                    gui_status_bar("已删除并保存", COL_UI_SOFT_OK);
                 } else if (r == -2) {
-                    gui_status_bar("ERROR: last admin cannot delete", COL_LRED);
+                    gui_status_bar("错误：不能删除最后的管理员", COL_UI_SOFT_ERR);
                 } else {
-                    gui_status_bar("ERROR: cannot delete", COL_LRED);
+                    gui_status_bar("错误：无法删除", COL_UI_SOFT_ERR);
                 }
                 kb_wait();
             }
