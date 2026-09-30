@@ -14,8 +14,8 @@
 #include "layout.h"
 #include <stdint.h>
 
-#define DT_HDR_H 12
-#define DT_FOOT_H 11
+#define DT_HDR_H 19
+#define DT_FOOT_H 18
 
 typedef struct { const char* name; uint32_t lba; uint32_t secs; } region_t;
 
@@ -60,46 +60,41 @@ void disktool_draw(int x,int y,int w,int h){
     gfx_fill_idx(x, y, x+w-1, y+h-1, COL_WHITE);
     // 标题
     gfx_fill_idx(x, y, x+w-1, y+DT_HDR_H-1, COL_ACCENT);
-    cjk_text(x+4, y+2, "磁盘工具", COL_WHITE, COL_ACCENT);
+    cjk_text(x+4, y+1, "磁盘工具", COL_WHITE, COL_ACCENT);
 
-    int cy = y+DT_HDR_H+4;
+    int cy = y+DT_HDR_H+3;
     const char* mdl = ata_model();
-    char line[80]; char* p;
+    char line[96]; char* p;
 
-    // 磁盘概览
-    p=line; p=dt_str(p,"磁盘型号: ");
-    int mc=0; while(mdl[mc]&&mc<28){ *p++=mdl[mc++]; }
-    *p=0; cjk_text(x+4, cy, line, COL_BLACK, COL_WHITE); cy+=12;
-
-    p=line; p=dt_str(p,"总扇区: "); p=dt_u(p, ata_total_sectors());
-    p=dt_str(p," ("); p=dt_gb(p, ata_total_sectors()); p=dt_str(p,")");
-    *p=0; cjk_text(x+4, cy, line, COL_BLACK, COL_WHITE); cy+=12;
+    // 磁盘型号 + 总容量
+    p=line; p=dt_str(p,"磁盘 ");
+    int mc=0; while(mdl[mc]&&mc<16){ *p++=mdl[mc++]; }
+    p=dt_str(p," 总"); p=dt_gb(p, ata_total_sectors());
+    *p=0; cjk_text(x+4, cy, line, COL_BLACK, COL_WHITE); cy+=18;
 
     // 文件系统用量
     int ue=0, us=0; fs_stats_total(&ue,&us);
     int used_kb = us/2;
-    int cap_kb  = FS_DATA_SECS/2;
     int free_kb = (FS_DATA_SECS - us)/2;
-    p=line; p=dt_str(p,"文件系统: 已用 "); p=dt_u(p,ue); p=dt_str(p," 项 / ");
-    p=dt_u(p,used_kb); p=dt_str(p,"KB  剩余 "); p=dt_u(p,free_kb); p=dt_str(p,"KB (共 "); p=dt_u(p,cap_kb); p=dt_str(p,"KB)");
-    *p=0; cjk_text(x+4, cy, line, COL_BLACK, COL_WHITE); cy+=12;
+    p=line; p=dt_str(p,"FS 已用 "); p=dt_u(p,ue); p=dt_str(p," 项 ");
+    p=dt_u(p,used_kb); p=dt_str(p,"KB 剩 "); p=dt_u(p,free_kb); p=dt_str(p,"KB");
+    *p=0; cjk_text(x+4, cy, line, COL_BLACK, COL_WHITE); cy+=18;
 
-    // 逻辑分区/区域表
-    cy+=2;
+    // 逻辑分区/区域表 (名称按像素宽度对齐到 88px 即 8 个汉字列)
     p=line; p=dt_str(p,"逻辑分区 (LBA 布局):"); *p=0;
-    cjk_text(x+4, cy, line, COL_ACCENT, COL_WHITE); cy+=12;
+    cjk_text(x+4, cy, line, COL_ACCENT, COL_WHITE); cy+=18;
     for(int i=0;i<NREG;i++){
-        if(cy > y+h-DT_FOOT_H-12) break;
+        if(cy > y+h-DT_FOOT_H-16) break;
         p=line;
         p=dt_str(p, g_reg[i].name);
-        // 补齐到固定宽度 (用空格)
-        int nw = dt_strlen(g_reg[i].name);
-        for(int s=0;s<10-nw;s++) *p++=' ';
-        p=dt_str(p,"LBA "); p=dt_u(p, g_reg[i].lba); p=dt_str(p," + "); p=dt_u(p, g_reg[i].secs); p=dt_str(p," 扇区");
+        int nw = cjk_text_w(g_reg[i].name);              // 像素宽
+        for(int s=0; s<(88-nw)/8; s++) *p++=' ';         // 补空格对齐 LBA 列
+        p=dt_str(p,"LBA "); p=dt_u(p, g_reg[i].lba);
+        p=dt_str(p," +"); p=dt_u(p, g_reg[i].secs); p=dt_str(p," 扇区");
         *p=0;
         uint8_t fg = (i%2)? COL_DGRAY : COL_BLACK;
         cjk_text(x+8, cy, line, fg, COL_WHITE);
-        cy+=11;
+        cy+=16;
     }
 
     // 提示/状态行

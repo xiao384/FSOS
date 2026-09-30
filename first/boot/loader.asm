@@ -147,6 +147,35 @@ start:
 .loaded:
     DBG '4'
 
+    ; ---- e820 物理内存总量检测 (结果存 0x6420, 紧跟 VBE 块 0x6400-0x641F 之后) ----
+    ; 累加所有 type==1 (可用) 且基址 < 4GB 的内存区间长度, 供内核报告真实物理内存。
+    ; 失败 (CF 置位/无 e820) 时保持 0, 内核回退到 256MB 常量。
+    xor ebx, ebx
+    mov di, 0x6430              ; e820 entry 临时缓冲 (避开 VBE 块与结果字)
+    mov dword [0x6420], 0
+    mov dword [0x6424], 0
+.e820_l:
+    mov eax, 0xE820
+    mov ecx, 24                 ; entry 大小 (含 64 位长度)
+    mov edx, 0x534D4150         ; 'SMAP' 签名
+    int 0x15
+    jc .e820_done
+    cmp eax, 0x534D4150
+    jne .e820_done
+    cmp dword [di+16], 1         ; type == 1 (可用)?
+    jne .e820_next
+    cmp dword [di+4], 0          ; base 高 32 位 != 0 (>=4GB) 则忽略
+    jne .e820_next
+    mov eax, [di+8]              ; length 低 32
+    mov edx, [di+12]             ; length 高 32
+    add [0x6420], eax
+    adc [0x6424], edx
+.e820_next:
+    cmp ebx, 0
+    je .e820_done
+    jmp .e820_l
+.e820_done:
+
     ; ---- 探测并设置 VBE 640x480x32 LFB 模式 ----
     ; 成功则把帧缓冲信息写入 0x6400 (magic 'VBE2'), gfx_init() 激活 LFB 路径;
     ; 失败则跳过, gfx_init() 回退 mode13h 320x200x256。

@@ -37,7 +37,7 @@ HELP_LINES = [
     'unzip <pkg>                extract to filestore',
     'unzip -l <pkg>             list files in a package',
     'install <pkg>              extract and register',
-    'run <pkg>                  run entry file of a package',
+    'run <pkg|file>             run app/script/executable (.py/.sh/.elf/... )',
     '---- system ----',
     'whoami                     current user and role',
     'drivers                    list registered kernel drivers',

@@ -12,11 +12,13 @@
 #include "paging.h"
 #include "sched.h"
 #include "filesys.h"
+#include "kb.h"
 #include "kheap.h"
 #include "io.h"
 #include "pmm.h"
 #include <stdint.h>
 #include <stddef.h>
+#include "hello_elf.inc"   // 内嵌 HELLO.ELF (Linuxulator 演示程序, 见 tools/gen_linux_hello.py)
 
 // ---------------- 小工具 ----------------
 static void lm_memset(void* d, int v, uint64_t n) {
@@ -32,6 +34,30 @@ static void lser_putc(char c) {
 }
 static void lser_puts(const char* s) { for (; *s; ++s) lser_putc(*s); }
 static int lm_strlen(const char* s) { int n = 0; while (s[n]) n++; return n; }
+
+// 启动期把内嵌的 HELLO.ELF 写入 FS (若不存在), 供 Ctrl+Alt+L / 自检加载。
+void linux_ensure_hello(void) {
+    if (fs_size("HELLO.ELF") >= 0) return;   // 已存在
+    fs_write_bin("HELLO.ELF", (const char*)g_hello_elf, (int)g_hello_elf_len);
+}
+
+#ifndef LINUX_SELFTEST
+#define LINUX_SELFTEST 1   // 打开后每次启动自动运行 HELLO.ELF 并打串口, 用于验证 Linuxulator; 不需要时改回 0
+#endif
+// 可选自检: 自动加载并运行 HELLO.ELF, 结果经 lser_putc 打串口。
+// 默认关闭; 构建期定义 LINUX_SELFTEST=1 可在无显示环境验证 Linuxulator。
+void linux_selftest(void) {
+    if (!LINUX_SELFTEST) return;
+    linux_ensure_hello();
+    int pid = linux_exec("HELLO.ELF");
+    lser_puts("[linux] selftest: linux_exec(HELLO.ELF) -> pid ");
+    char tmp[12]; int ti = 0, v = pid;
+    if (v < 0) { tmp[ti++] = '-'; v = -v; }
+    if (v == 0) tmp[ti++] = '0';
+    while (v > 0) { tmp[ti++] = (char)('0' + v % 10); v /= 10; }
+    while (ti) lser_putc(tmp[--ti]);
+    lser_puts("\r\n");
+}
 
 // ---------------- ELF 结构 (Linux x86-64) ----------------
 typedef struct {
@@ -86,12 +112,41 @@ typedef struct {
 #define LINUX_STACK_PAGES 4
 #define MMAP_BASE        0x30000000ULL   // mmap/brk 虚拟区起点
 
+// ---------------- per-process Linux 上下文 ----------------
+#define LINUX_MAX_PROCS 32
+static linux_ctx_t g_ctx[LINUX_MAX_PROCS];
+
+static linux_ctx_t* ctx_by_pid(int pid) {
+    if (pid < 0 || pid >= LINUX_MAX_PROCS) return 0;
+    if (!g_ctx[pid].in_use) return 0;
+    return &g_ctx[pid];
+}
+
+linux_ctx_t* linux_ctx_current(void) {
+    int pid = sched_current_pid();
+    return ctx_by_pid(pid);
+}
+
+void linux_ctx_free_current(void) {
+    int pid = sched_current_pid();
+    if (pid < 0 || pid >= LINUX_MAX_PROCS) return;
+    g_ctx[pid].in_use = 0;
+}
+
+static linux_ctx_t* ctx_alloc(int pid) {
+    if (pid < 0 || pid >= LINUX_MAX_PROCS) return 0;
+    g_ctx[pid].in_use = 1;
+    g_ctx[pid].brk = LINUX_BASE + 0x100000;
+    g_ctx[pid].mmap_next = MMAP_BASE;
+    return &g_ctx[pid];
+}
+
 // ---------------- 加载 ----------------
 int linux_exec(const char* path) {
     uint8_t* buf = (uint8_t*)kmalloc(65536);
     if (!buf) return -1;
 
-    int n = fs_read(path, (char*)buf, 65536);
+    int n = fs_read_bin(path, (char*)buf, 65536);
     if (n <= 0) { kfree(buf); return -2; }
 
     LEhdr* eh = (LEhdr*)buf;
@@ -200,6 +255,7 @@ int linux_exec(const char* path) {
     paging_switch(saved_cr3);
 
     int pid = sched_create_user_process_ex(pml4, base + entry, user_rsp, "linux", 1);
+    if (pid > 0) ctx_alloc(pid);   // 登记 per-process 上下文
     kfree(buf);
     return pid;
 }
@@ -209,15 +265,28 @@ int linux_exec(const char* path) {
 //         brk=12 rt_sigaction=13 rt_sigprocmask=15 getpid=39
 //         access=21 arch_prctl=158 set_tid_address=218 exit=60 exit_group=231
 //         set_robust_list=273
-static uint64_t g_brk  = 0;
-static uint64_t g_mmap = MMAP_BASE;
 
 uint64_t linux_syscall(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
                        uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a4; (void)a5; (void)a6;
     switch (num) {
-        case 0:  // read: 无输入, 直接 EOF
-            return 0;
+        case 0: {  // read(fd, buf, len): 仅实现 stdin(fd 0) 来自键盘; 其它 fd 暂不支持
+            int fd = (int)a1;
+            char* p = (char*)(uintptr_t)a2;
+            uint64_t len = a3;
+            if (fd == 0) {
+                uint64_t got = 0;
+                for (uint64_t i = 0; i < len; i++) {
+                    int c = kb_poll();
+                    if (c == 0) break;                 // 当前无可用按键
+                    if (c >= 0x100) break;             // 跳过扩展键 (方向键等)
+                    if (c == '\r') c = '\n';           // 回车归一化
+                    p[i] = (char)c; got++;
+                }
+                return got;
+            }
+            return (uint64_t)-1;   // -EBADF (尚未实现 open())
+        }
         case 1: {  // write(fd, buf, len)
             int fd = (int)a1;
             const char* p = (const char*)(uintptr_t)a2;
@@ -237,25 +306,28 @@ uint64_t linux_syscall(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
             *(uint32_t*)(st + 16) = 0x2000;
             return 0;
         }
-        case 12: { // brk
+        case 12: { // brk (per-process)
+            linux_ctx_t* ctx = linux_ctx_current();
+            if (!ctx) return 0;
             uint64_t addr = a1;
-            if (g_brk == 0) g_brk = LINUX_BASE + 0x100000;
-            if (addr == 0) return g_brk;
-            if (addr > g_brk) {
-                uint64_t s = (g_brk + 0xFFF) & ~0xFFFULL;
+            if (addr == 0) return ctx->brk;
+            if (addr > ctx->brk) {
+                uint64_t s = (ctx->brk + 0xFFF) & ~0xFFFULL;
                 uint64_t e = (addr + 0xFFF) & ~0xFFFULL;
                 for (; s < e; s += 0x1000)
                     paging_map_4k(s, pmm_alloc_frame(), PG_USER | PG_RW);
-                g_brk = addr;
+                ctx->brk = addr;
             }
-            return g_brk;
+            return ctx->brk;
         }
-        case 9: {  // mmap(addr, len, prot, flags, fd, off)
+        case 9: {  // mmap(addr, len, prot, flags, fd, off) (per-process)
+            linux_ctx_t* ctx = linux_ctx_current();
+            if (!ctx) return (uint64_t)-1;
             uint64_t len = (a2 + 0xFFF) & ~0xFFFULL;
-            uint64_t addr = g_mmap;
+            uint64_t addr = ctx->mmap_next;
             for (uint64_t s = addr; s < addr + len; s += 0x1000)
                 paging_map_4k(s, pmm_alloc_frame(), PG_USER | PG_RW);
-            g_mmap += len;
+            ctx->mmap_next += len;
             return addr;
         }
         case 13: // rt_sigaction
@@ -284,6 +356,7 @@ uint64_t linux_syscall(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3,
             return 0;
         case 60:  // exit
         case 231: // exit_group
+            linux_ctx_free_current();
             sched_exit();
             return 0;   // 不会到达
         default:

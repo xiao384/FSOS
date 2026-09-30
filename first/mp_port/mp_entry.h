@@ -20,6 +20,11 @@ int mp_fsos_run(int mode);
 // 返回 0 表示正常执行完毕 (源码内异常由 MicroPython 自行打印)。
 int mp_fsos_run_str(const char* src);
 
+// T4.1: 缓冲式交互 REPL — stdout 经 console_emit 进入环形缓冲,
+// 由终端/DevStudio 输出面板 console_drain 回填, 不直写 VGA 全屏文本。
+// 返回 1 表示正常运行; 0 表示运行时初始化失败。
+int mp_fsos_run_buffered(void);
+
 // 本内核是否编译进了真正的 MicroPython 运行时。
 //   真实实现 (micropython/ports/fsos/mp_entry.c) -> 1
 //   占位实现 (mp_stub.c, 未启用 MicroPython 的构建)      -> 0

@@ -15,7 +15,6 @@
 
 // VBE 信息结构 (boot.asm 写入物理 0x6400)
 #define VBE_INFO 0x6400UL
-#define FONT_ADDR 0xB0000UL
 
 // GOP 信息结构 (UEFI loader 写入物理 0x6400, 与 VBE 互斥, 二选一).
 // 前置声明, 供 gfx_init 的 UEFI 原生路径使用.
@@ -57,31 +56,49 @@ const uint32_t gfx_palette[GFX_COLORS] = {
     0x3F2800, // 19 orange (63,40,0)
     0x00241C, // 20 field (0,36,28)
     // ---- UI 主题扩展色 21..31 (与 vga.h COL_* 同步, 勿乱改旧 0..20) ----
-    0x24365A, // 21 WALL_A：蓝紫极光的亮部
-    0x1D2D50, // 22 WALL_B
-    0x182646, // 23 WALL_C
-    0x131E3A, // 24 WALL_D
-    0x0E182E, // 25 WALL_E
-    0x09101F, // 26 WALL_F：夜色底部
-    0x2D7FF9, // 27 ACCENT：清晰、低饱和的系统蓝
-    0x294D82, // 28 ACCENT_SOFT：玻璃上的悬停蓝
-    0x383C46, // 29 TASKBAR：深色 Dock / 菜单底
-    0x4B5260, // 30 TASK_HI：Dock / 菜单悬停
-    0x05070D, // 31 SHADOW：阴影/描边
+    0x090D16, // 21 WALL_A：蓝紫极光的亮部（6-bit DAC）
+    0x070B14, // 22 WALL_B
+    0x060911, // 23 WALL_C
+    0x05070E, // 24 WALL_D
+    0x03060B, // 25 WALL_E
+    0x020408, // 26 WALL_F：夜色底部
+    0x1A2A3F, // 27 ACCENT：清晰、低饱和的系统蓝
+    0x101B2B, // 28 ACCENT_SOFT：玻璃上的悬停蓝
+    0x050607, // 29 TASKBAR：深色 Dock / 菜单底
+    0x0B0C0F, // 30 TASK_HI：Dock / 菜单悬停
+    0x020204, // 31 SHADOW：阴影/描边
 };
 
 // 现代 UI 柔和扩展色 160..165 (与 vga.h COL_UI_* 同步; 每字节为 6-bit DAC 值 0..63,
 // 与 gfx_palette 存法一致, 经 idx_to_rgb 高 6 位展开为 8bit)
 // 均为低饱和柔和色: 状态色可区分、大面积背景低饱和、标题/Dock 悬停层次分明。
 const uint32_t gfx_palette_ext[GFX_COLORS_EXT] = {
-    0x162818, // 160 SOFT_OK  柔和绿 (成功)
-    0x2A1A1A, // 161 SOFT_ERR 柔和红 (错误)
-    0x2B2518, // 162 SOFT_WARN 柔和琥珀 (警告)
-    0x101C2F, // 163 BG_SOFT  夜色蓝灰 (大面积背景)
-    0x17233B, // 164 TITLE_SOFT 标题栏深蓝 (聚焦)
-    0x202F3F, // 165 DOCK_HI_SOFT Dock 悬停浅蓝
+    /* 160..180: full 8-bit RGB theme tokens for native GOP. */
+    0x0B1220, /* BG */
+    0x121C2F, /* PANEL */
+    0x0F182A, /* TITLE */
+    0x0A1322, /* TASKBAR */
+    0x101B2E, /* MENU */
+    0xF5F7FA, /* FG */
+    0xB4BFCD, /* FG_SOFT */
+    0xFFFFFF, /* FG_TITLE */
+    0x4AA8FF, /* ACCENT */
+    0x235D91, /* ACCENT_SOFT */
+    0x2A3A50, /* BORDER */
+    0x5EB6FF, /* BORDER_FOCUS */
+    0x02060D, /* SHADOW */
+    0x1B2A40, /* HOVER */
+    0x284765, /* PRESSED */
+    0x273244, /* DISABLED */
+    0x34D399, /* SUCCESS */
+    0xF59E0B, /* WARNING */
+    0xF87171, /* DANGER */
+    0x0D1727, /* FIELD */
+    0x17253A, /* FIELD_FOCUS */
+    0x8AB4F8, /* legacy soft accent */
+    0x334155, /* neutral */
+    0x1E293B  /* neutral 2 */
 };
-
 // 取调色板真彩色: 索引 <32 查基础表, 160..165 查扩展表, 其余返回 0
 static inline uint32_t palette_color(uint8_t idx) {
     if (idx < GFX_COLORS) return gfx_palette[idx];
@@ -105,6 +122,46 @@ static int g_scale = 1;            // 逻辑像素 -> 原生像素倍数 (UEFI �
 static int g_off_x = 0, g_off_y = 0; // 逻辑坐标系在原生缓冲中的居中偏移
 static int g_native = 0;           // 1 = UEFI GOP 原生 32bpp 路径 (present 不再镜像放大)
 
+// ---- 脏区局部重绘: 绘制裁剪框 ----
+// 逻辑坐标裁剪框(闭区间); 同时推导原生(后台缓冲)坐标裁剪框。
+// 桌面 LFB 路径 scale=1/off=0; 其它路径 scale/off 也可能 != 1, 两框均维护以确保正确。
+static int g_clip_on = 0;
+static int g_clip_x0 = 0, g_clip_y0 = 0, g_clip_x1 = -1, g_clip_y1 = -1;    // 逻辑
+static int g_nclip_x0 = 0, g_nclip_y0 = 0, g_nclip_x1 = -1, g_nclip_y1 = -1; // 原生
+
+void gfx_set_clip(int x0, int y0, int x1, int y1) {
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > g_w - 1) x1 = g_w - 1;
+    if (y1 > g_h - 1) y1 = g_h - 1;
+    g_clip_on = 1;
+    if (x1 < x0 || y1 < y0) { g_clip_x1 = -1; g_nclip_x1 = -1; return; }  // 空区域 -> 全跳过
+    g_clip_x0 = x0; g_clip_y0 = y0; g_clip_x1 = x1; g_clip_y1 = y1;
+    int sc = g_scale;
+    g_nclip_x0 = x0 * sc + g_off_x;
+    g_nclip_y0 = y0 * sc + g_off_y;
+    g_nclip_x1 = (x1 + 1) * sc - 1 + g_off_x;
+    g_nclip_y1 = (y1 + 1) * sc - 1 + g_off_y;
+}
+void gfx_reset_clip(void) { g_clip_on = 0; }
+
+// 查询当前裁剪框是否与给定逻辑矩形相交 (无裁剪时恒真)。
+// 供 wm.c 在局部重绘时跳过完全位于脏区域之外的整幅绘制, 大幅降低无效迭代。
+int gfx_clip_active(void) { return g_clip_on; }
+int gfx_clip_intersects(int x0, int y0, int x1, int y1) {
+    if (!g_clip_on) return 1;
+    if (g_clip_x1 < g_clip_x0) return 0;          // 空裁剪框
+    if (x1 < g_clip_x0 || x0 > g_clip_x1 || y1 < g_clip_y0 || y0 > g_clip_y1) return 0;
+    return 1;
+}
+
+// 字形/几何: 原生坐标包围盒是否与当前裁剪框相交 (供局部重绘时整字/整形跳过)
+static inline int g_clip_box_hit_native(int bx0, int by0, int bx1, int by1) {
+    if (g_nclip_x1 < g_nclip_x0) return 0;
+    if (bx1 < g_nclip_x0 || bx0 > g_nclip_x1 || by1 < g_nclip_y0 || by0 > g_nclip_y1) return 0;
+    return 1;
+}
+
 int gfx_font_scale(void) { return g_font_scale; }
 int gfx_scale(void)      { return g_scale; }
 
@@ -124,6 +181,10 @@ static inline uint32_t pack_rgb(uint8_t r, uint8_t g, uint8_t b) {
 static inline void put_px_real(int rx, int ry, uint32_t px) {
     rx += g_off_x; ry += g_off_y;
     if (rx < 0 || ry < 0 || rx >= g_buf_w || ry >= g_buf_h) return;
+    if (g_clip_on) {   // 脏区裁剪 (原生坐标)
+        if (g_nclip_x1 < g_nclip_x0) return;
+        if (rx < g_nclip_x0 || rx > g_nclip_x1 || ry < g_nclip_y0 || ry > g_nclip_y1) return;
+    }
     uint8_t* p = g_back + (size_t)ry * g_buf_pitch + (size_t)rx * g_bpp_bytes;
     if (g_bpp_bytes == 4)      *(uint32_t*)p = px;
     else if (g_bpp_bytes == 2) *(uint16_t*)p = (uint16_t)px;
@@ -133,6 +194,10 @@ static inline void put_px_real(int rx, int ry, uint32_t px) {
 // 写逻辑像素: 自动按 g_scale 放大成 g_scale x g_scale 的原生像素块.
 // 所有图元都经此出口 -> 形状在原生分辨率下锐利; mode13h 时 g_scale=1 行为不变.
 static inline void put_px(int x, int y, uint32_t px) {
+    if (g_clip_on) {   // 脏区裁剪 (逻辑坐标)
+        if (g_clip_x1 < g_clip_x0) return;
+        if (x < g_clip_x0 || x > g_clip_x1 || y < g_clip_y0 || y > g_clip_y1) return;
+    }
     int rx = x * g_scale + g_off_x, ry = y * g_scale + g_off_y;
     for (int dy = 0; dy < g_scale; dy++) {
         int Y = ry + dy;
@@ -263,7 +328,7 @@ static int gfx_init_lfb(const vbe_info_t* vi) {
         g_rshift = 0;  g_gshift = 8; g_bshift = 16;
     }
     g_front = (void*)(uintptr_t)vi->fb_addr;
-    g_native = 0; g_scale = 1; g_off_x = 0; g_off_y = 0;
+    g_native = 1; g_scale = 1; g_off_x = 0; g_off_y = 0;
     g_buf_w = g_w; g_buf_h = g_h; g_buf_pitch = g_pitch;   // 原生/逻辑重合
     g_font_scale = compute_font_scale(g_w, g_h);
     gfx_setup_backbuffer();
@@ -316,18 +381,25 @@ void gfx_init(void) {
     }
 
     // UEFI GOP 原生路径: 0x6400 也可能是 GOP 信息 (magic 'GFXL').
-    // 直接以原生 32bpp 初始化 LFB, 逻辑分辨率仍 320x200, 绘制由 g_scale 放大 ->
-    // 原生分辨率 + 抗锯齿字体, 且所有 wm.c/app 代码零改动. 失败时回退 mode13h.
+    // 直接以原生 32bpp 初始化 LFB。逻辑画布按 GOP 尺寸/整数缩放动态扩展，
+    // 让 320x200 时代的应用仍可运行，同时消除旧版居中黑/蓝边。
     {
         const gop_info_t* gi = (const gop_info_t*)(uintptr_t)GOP_INFO_ADDR;
         if (gi->magic == GOP_INFO_MAGIC && gi->fb_addr != 0 &&
             gi->width >= 320 && gi->height >= 200 && gi->pitch >= gi->width * 4) {
-            int s = (gi->width / 320 < gi->height / 200) ? (gi->width / 320) : (gi->height / 200);
-            if (s < 1) s = 1;
-            gfx_ser_str("[gfx] activating GOP native path, scale="); gfx_ser_hex((uint32_t)s); gfx_ser_str("\r\n");
+            /* First-principles GUI pipeline: the GOP framebuffer is the actual canvas.
+               Legacy 320x200 assumptions are removed here; the shell and layout code
+               receive physical pixels so a 1920x1080 desktop is really 1920x1080. */
+            int logical_w = (int)gi->width;
+            int logical_h = (int)gi->height;
+            int ui_font_scale = (logical_w >= 1600 && logical_h >= 900) ? 2 :
+                                ((logical_w >= 1000 && logical_h >= 600) ? 1 : 1);
+            gfx_ser_str("[gfx] activating GOP native path ");
+            gfx_ser_hex((uint32_t)logical_w); gfx_ser_putc('x'); gfx_ser_hex((uint32_t)logical_h);
+            gfx_ser_str(" font_scale="); gfx_ser_hex((uint32_t)ui_font_scale); gfx_ser_str("\r\n");
             g_native = 1;
             g_lfb = 1;
-            g_w = 320; g_h = 200;                 // 逻辑分辨率 (apps 不变)
+            g_w = logical_w; g_h = logical_h;
             g_buf_w = (int)gi->width;
             g_buf_h = (int)gi->height;
             g_buf_pitch = (int)gi->pitch;
@@ -336,10 +408,10 @@ void gfx_init(void) {
             if (gi->format == 0) { g_rshift = 0;  g_gshift = 8; g_bshift = 16; }  // RGBX
             else                 { g_rshift = 16; g_gshift = 8; g_bshift = 0;  }  // BGRX
             g_front = (void*)(uintptr_t)gi->fb_addr;
-            g_scale = s;
-            g_font_scale = s;                      // 供 gfx_text_w / vga 间距对齐
-            g_off_x = (g_buf_w - g_w * s) / 2;
-            g_off_y = (g_buf_h - g_h * s) / 2;
+            g_scale = 1;
+            g_font_scale = 1;
+            g_off_x = 0;
+            g_off_y = 0;
             gfx_setup_backbuffer();
             return;
         }
@@ -371,6 +443,13 @@ void gfx_fill_rgb(int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t 
     if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
     if (x1 >= g_w) x1 = g_w - 1; if (y1 >= g_h) y1 = g_h - 1;
     if (x1 < x0 || y1 < y0) return;
+    if (g_clip_on && g_clip_x1 >= g_clip_x0) {   // 脏区局部重绘: 逻辑矩形与裁剪框求交
+        if (x0 < g_clip_x0) x0 = g_clip_x0;
+        if (y0 < g_clip_y0) y0 = g_clip_y0;
+        if (x1 > g_clip_x1) x1 = g_clip_x1;
+        if (y1 > g_clip_y1) y1 = g_clip_y1;
+        if (x1 < x0 || y1 < y0) return;
+    }
     uint32_t px = pack_rgb(r, g, b);
     int sc = g_scale;
     int rx0 = x0 * sc + g_off_x, ry0 = y0 * sc + g_off_y;
@@ -404,6 +483,7 @@ static void gfx_glyph_plain(int x, int y, uint8_t ch,
     if (ch >= 128) ch = '?';
     if (ch < 0x20) ch = 0x20;
     const uint8_t* gl = &font[(ch - 0x20) * 8];
+    if (g_clip_on && !gfx_clip_intersects(x, y, x + 7, y + 7)) return;   // 整字跳过
     uint32_t fgc = pack_rgb(fr, fg, fb);
     uint32_t bgc = pack_rgb(br, bg, bb);
     for (int col = 0; col < 8; col++) {
@@ -424,6 +504,7 @@ static void gfx_glyph_aa(int x, int y, uint8_t ch,
     const uint8_t* gl = &font[(ch - 0x20) * 8];
     int sc = g_scale;
     int ox = x * sc, oy = y * sc;
+    if (g_clip_on && !g_clip_box_hit_native(ox + g_off_x, oy + g_off_y, ox + g_off_x + 8*sc - 1, oy + g_off_y + 8*sc - 1)) return;
     for (int ry = 0; ry < 8 * sc; ry++) {
         int pys = (ry << 16) / sc;             // 16.16 逻辑 y 坐标
         int y0 = pys >> 16; if (y0 > 7) y0 = 7;
@@ -456,12 +537,96 @@ void gfx_draw_char_aa(int x, int y, char ch,
     else             gfx_glyph_plain(x, y, (uint8_t)ch, fr, fg, fb, br, bg, bb);
 }
 
+// ---- 透明背景字形: 与 AA 字形同一套双线性覆盖计算, 但不加底色,
+//      直接把字形覆盖度混合到现有帧 (供 macOS 玻璃顶栏 / 壁纸表面绘制文字) ----
+static inline void alpha_blend_native(int rx, int ry, uint8_t r, uint8_t g, uint8_t b, int cov);
+
+// 透明背景 8x8 ASCII 字形
+void gfx_draw_char_over(int x, int y, char ch, uint8_t fr, uint8_t fg, uint8_t fb) {
+    const uint8_t* font = (const uint8_t*)g_font8x8;
+    uint8_t c = (uint8_t)ch;
+    if (c >= 128) c = '?';
+    if (c < 0x20) c = 0x20;
+    const uint8_t* gl = &font[(c - 0x20) * 8];
+    int sc = g_scale;
+    int ox = x * sc, oy = y * sc;
+    if (g_clip_on && !g_clip_box_hit_native(ox + g_off_x, oy + g_off_y, ox + g_off_x + 8*sc - 1, oy + g_off_y + 8*sc - 1)) return;
+    for (int ry = 0; ry < 8 * sc; ry++) {
+        int pys = (ry << 16) / sc;
+        int y0 = pys >> 16; if (y0 > 7) y0 = 7;
+        int y1 = y0 + 1;    if (y1 > 7) y1 = 7;
+        int ty = pys & 0xFFFF;
+        for (int rx = 0; rx < 8 * sc; rx++) {
+            int pxs = (rx << 16) / sc;
+            int x0 = pxs >> 16; if (x0 > 7) x0 = 7;
+            int x1 = x0 + 1;    if (x1 > 7) x1 = 7;
+            int tx = pxs & 0xFFFF;
+            int b00 = (gl[x0] >> y0) & 1, b10 = (gl[x1] >> y0) & 1;
+            int b01 = (gl[x0] >> y1) & 1, b11 = (gl[x1] >> y1) & 1;
+            int v00 = b00 << 16, v10 = b10 << 16, v01 = b01 << 16, v11 = b11 << 16;
+            int top = v00 + (((v10 - v00) * tx) >> 16);
+            int bot = v01 + (((v11 - v01) * tx) >> 16);
+            int cov = top + (((bot - top) * ty) >> 16);
+            if (cov <= 0) continue;
+            alpha_blend_native(ox + rx + g_off_x, oy + ry + g_off_y, fr, fg, fb, cov >> 8);
+        }
+    }
+}
+
+// 透明背景 16x16 CJK 字形
+void gfx_draw_cjk_aa_over(int x, int y, const uint16_t* rows, uint8_t fr, uint8_t fg, uint8_t fb) {
+    if (!rows) return;
+    int sc = g_scale;
+    int ox = x * sc, oy = y * sc;
+    if (g_clip_on && !g_clip_box_hit_native(ox + g_off_x, oy + g_off_y, ox + g_off_x + 16*sc - 1, oy + g_off_y + 16*sc - 1)) return;
+    for (int ry = 0; ry < 16 * sc; ry++) {
+        int pys = (ry << 16) / sc;
+        int y0 = pys >> 16; if (y0 > 15) y0 = 15;
+        int y1 = y0 + 1;    if (y1 > 15) y1 = 15;
+        int ty = pys & 0xFFFF;
+        for (int rx = 0; rx < 16 * sc; rx++) {
+            int pxs = (rx << 16) / sc;
+            int x0 = pxs >> 16; if (x0 > 15) x0 = 15;
+            int x1 = x0 + 1;    if (x1 > 15) x1 = 15;
+            int tx = pxs & 0xFFFF;
+            int b00 = (rows[y0] >> (15 - x0)) & 1;
+            int b10 = (rows[y0] >> (15 - x1)) & 1;
+            int b01 = (rows[y1] >> (15 - x0)) & 1;
+            int b11 = (rows[y1] >> (15 - x1)) & 1;
+            int v00 = b00 << 16, v10 = b10 << 16, v01 = b01 << 16, v11 = b11 << 16;
+            int top = v00 + (((v10 - v00) * tx) >> 16);
+            int bot = v01 + (((v11 - v01) * tx) >> 16);
+            int cov = top + (((bot - top) * ty) >> 16);
+            if (cov <= 0) continue;
+            alpha_blend_native(ox + rx + g_off_x, oy + ry + g_off_y, fr, fg, fb, cov >> 8);
+        }
+    }
+}
+
+// 透明背景 24x24 CJK 字形
+void gfx_draw_cjk24_aa_over(int x, int y, const uint32_t* rows, uint8_t fr, uint8_t fg, uint8_t fb) {
+    if (!rows) return;
+    int sc = g_scale;
+    int ox = x * sc, oy = y * sc;
+    if (g_clip_on && !g_clip_box_hit_native(ox + g_off_x, oy + g_off_y, ox + g_off_x + 24*sc - 1, oy + g_off_y + 24*sc - 1)) return;
+    for (int ry = 0; ry < 24 * sc; ry++) {
+        int sy = ry / sc;
+        for (int rx = 0; rx < 24 * sc; rx++) {
+            int sx = rx / sc;
+            int on = (rows[sy] >> (23 - sx)) & 1u;
+            if (!on) continue;
+            alpha_blend_native(ox + rx + g_off_x, oy + ry + g_off_y, fr, fg, fb, 256);
+        }
+    }
+}
+
 // 导出: CJK 16x16 位图抗锯齿放大 (供 cjk.c 在原生模式下调用)
 void gfx_draw_cjk_aa(int x, int y, const uint16_t* rows,
                      uint8_t fr, uint8_t fg, uint8_t fb,
                      uint8_t br, uint8_t bg, uint8_t bb) {
     int sc = g_scale;
     int ox = x * sc, oy = y * sc;   // put_px_real 内部再加 g_off_x/y 居中偏移
+    if (g_clip_on && !g_clip_box_hit_native(ox + g_off_x, oy + g_off_y, ox + g_off_x + 16*sc - 1, oy + g_off_y + 16*sc - 1)) return;
     for (int ry = 0; ry < 16 * sc; ry++) {
         int pys = (ry << 16) / sc;
         int y0 = pys >> 16; if (y0 > 15) y0 = 15;
@@ -488,9 +653,37 @@ void gfx_draw_cjk_aa(int x, int y, const uint16_t* rows,
     }
 }
 
+void gfx_draw_cjk24_aa(int x, int y, const uint32_t* rows,
+                       uint8_t fr, uint8_t fg, uint8_t fb,
+                       uint8_t br, uint8_t bg, uint8_t bb) {
+    if (!rows) return;
+    int sc = g_scale;
+    int ox = x * sc, oy = y * sc;
+    if (g_clip_on && !g_clip_box_hit_native(ox + g_off_x, oy + g_off_y, ox + g_off_x + 24*sc - 1, oy + g_off_y + 24*sc - 1)) return;
+    /* Render the complete 24x24 source bitmap.  Do not downsample: that was the
+       direct cause of broken Chinese strokes in the previous UI renderer. */
+    for (int ry = 0; ry < 24 * sc; ry++) {
+        int sy = ry / sc;
+        for (int rx = 0; rx < 24 * sc; rx++) {
+            int sx = rx / sc;
+            int on = (rows[sy] >> (23 - sx)) & 1u;
+            uint8_t R = on ? fr : br;
+            uint8_t G = on ? fg : bg;
+            uint8_t B = on ? fb : bb;
+            put_px_real(ox + rx, oy + ry, pack_rgb(R, G, B));
+        }
+    }
+}
+
 // 导出: 调色板索引 -> 8bit RGB (供 vga.c 转换 COL_* 字体色)
 void gfx_idx_rgb(uint8_t idx, uint8_t* r, uint8_t* g, uint8_t* b) {
     uint32_t c = palette_color(idx);
+    if (idx >= COL_UI_BASE && idx < COL_UI_BASE + GFX_COLORS_EXT) {
+        *r = (uint8_t)((c >> 16) & 0xFF);
+        *g = (uint8_t)((c >> 8) & 0xFF);
+        *b = (uint8_t)(c & 0xFF);
+        return;
+    }
     uint32_t r6 = (c >> 16) & 0x3F, g6 = (c >> 8) & 0x3F, b6 = c & 0x3F;
     *r = (uint8_t)((r6 * 255u + 31u) / 63u);
     *g = (uint8_t)((g6 * 255u + 31u) / 63u);
@@ -513,8 +706,12 @@ void gfx_text_rgb(int x, int y, const char* s,
 // LFB (32bpp) 路径下, 索引经调色板 (基础+扩展) 转真彩色; mode13h (8bpp) 直接写索引。
 static inline void idx_to_rgb(uint8_t idx, uint8_t* r, uint8_t* g, uint8_t* b) {
     uint32_t c = palette_color(idx);
-    // gfx_palette 存 6-bit DAC 值 (0..63), LFB 32bpp 需 8-bit (0..255)
-    // 与 GOP 路径 gop_dac8 同公式, 否则整体暗 4 倍
+    if (idx >= COL_UI_BASE && idx < COL_UI_BASE + GFX_COLORS_EXT) {
+        *r = (uint8_t)((c >> 16) & 0xFF);
+        *g = (uint8_t)((c >> 8) & 0xFF);
+        *b = (uint8_t)(c & 0xFF);
+        return;
+    }
     uint32_t r6 = (c >> 16) & 0x3F, g6 = (c >> 8) & 0x3F, b6 = c & 0x3F;
     *r = (r6 * 255u + 31u) / 63u;
     *g = (g6 * 255u + 31u) / 63u;
@@ -543,6 +740,13 @@ void gfx_fill_idx(int x0, int y0, int x1, int y1, uint8_t idx) {
     if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
     if (x1 >= g_w) x1 = g_w - 1; if (y1 >= g_h) y1 = g_h - 1;
     if (x1 < x0 || y1 < y0) return;
+    if (g_clip_on && g_clip_x1 >= g_clip_x0) {   // 脏区局部重绘 (mode13h 路径)
+        if (x0 < g_clip_x0) x0 = g_clip_x0;
+        if (y0 < g_clip_y0) y0 = g_clip_y0;
+        if (x1 > g_clip_x1) x1 = g_clip_x1;
+        if (y1 > g_clip_y1) y1 = g_clip_y1;
+        if (x1 < x0 || y1 < y0) return;
+    }
     for (int y = y0; y <= y1; y++)
         for (int x = x0; x <= x1; x++)
             g_back[y * g_pitch + x] = idx;
@@ -693,6 +897,10 @@ static uint8_t rgb_to_idx(uint8_t r, uint8_t g, uint8_t b) {
 // 原生像素覆盖混合: 读后台缓冲当前像素, 按 cov (0..256) 混合前景色写回
 static inline void alpha_blend_native(int rx, int ry, uint8_t r, uint8_t g, uint8_t b, int cov) {
     if (rx < 0 || ry < 0 || rx >= g_buf_w || ry >= g_buf_h) return;
+    if (g_clip_on) {   // 脏区裁剪 (原生坐标)
+        if (g_nclip_x1 < g_nclip_x0) return;
+        if (rx < g_nclip_x0 || rx > g_nclip_x1 || ry < g_nclip_y0 || ry > g_nclip_y1) return;
+    }
     uint8_t* p = g_back + (size_t)ry * g_buf_pitch + (size_t)rx * g_bpp_bytes;
     uint32_t cur;
     if (g_bpp_bytes == 4) cur = *(uint32_t*)p;
@@ -722,6 +930,143 @@ static inline void blend_px_logical(int x, int y, uint8_t r, uint8_t g, uint8_t 
 void gfx_alpha_over_rgb(int x, int y, uint8_t r, uint8_t g, uint8_t b, int cov) {
     if (!g_lfb) { if (cov >= 128) gfx_pixel_idx(x, y, rgb_to_idx(r, g, b)); return; }
     blend_px_logical(x, y, r, g, b, cov);
+}
+
+// 半透明矩形填充 (逻辑坐标, a=0..256): macOS 风格顶栏/悬浮面板的玻璃质感基础
+void gfx_fill_rgb_alpha(int x0, int y0, int x1, int y1, uint8_t r, uint8_t g, uint8_t b, int a) {
+    if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+    if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
+    if (!g_lfb) { if (a >= 128) gfx_fill_idx(x0, y0, x1, y1, rgb_to_idx(r, g, b)); return; }
+    if (a <= 0) return;
+    if (a > 256) a = 256;
+    if (g_clip_on && g_clip_x1 >= g_clip_x0) {   // 脏区局部重绘: 逻辑矩形与裁剪框求交
+        if (x0 < g_clip_x0) x0 = g_clip_x0;
+        if (y0 < g_clip_y0) y0 = g_clip_y0;
+        if (x1 > g_clip_x1) x1 = g_clip_x1;
+        if (y1 > g_clip_y1) y1 = g_clip_y1;
+        if (x1 < x0 || y1 < y0) return;
+    }
+    for (int y = y0; y <= y1; y++)
+        for (int x = x0; x <= x1; x++)
+            blend_px_logical(x, y, r, g, b, a);
+}
+
+// 半透明圆角矩形填充 (逻辑坐标): 内部整块 alpha, 圆角外不混合
+void gfx_fill_round_rgb_alpha(int x0, int y0, int x1, int y1, int rad,
+                              uint8_t r, uint8_t g, uint8_t b, int a) {
+    if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+    if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
+    if (!g_lfb) { if (a >= 128) gfx_fill_round_idx(x0, y0, x1, y1, rad, rgb_to_idx(r, g, b)); return; }
+    if (a <= 0) return;
+    if (a > 256) a = 256;
+    if (g_clip_on && g_clip_x1 >= g_clip_x0) {   // 脏区局部重绘: 逻辑矩形与裁剪框求交
+        if (x0 < g_clip_x0) x0 = g_clip_x0;
+        if (y0 < g_clip_y0) y0 = g_clip_y0;
+        if (x1 > g_clip_x1) x1 = g_clip_x1;
+        if (y1 > g_clip_y1) y1 = g_clip_y1;
+        if (x1 < x0 || y1 < y0) return;
+    }
+    if (rad <= 0) { gfx_fill_rgb_alpha(x0, y0, x1, y1, r, g, b, a); return; }
+    int w = x1 - x0 + 1, h = y1 - y0 + 1;
+    int m = w < h ? w : h;
+    if (rad > m / 2) rad = m / 2;
+    int r2 = rad * rad;
+    int cxl = x0 + rad, cxr = x1 - rad, cyt = y0 + rad, cyb = y1 - rad;
+    for (int y = y0; y <= y1; y++) {
+        int inTop = y < cyt, inBot = y > cyb;
+        for (int x = x0; x <= x1; x++) {
+            int inside = 1;
+            if (inTop && x < cxl) { int dx = cxl - x, dy = cyt - y; if (dx * dx + dy * dy > r2) inside = 0; }
+            else if (inTop && x > cxr) { int dx = x - cxr, dy = cyt - y; if (dx * dx + dy * dy > r2) inside = 0; }
+            else if (inBot && x < cxl) { int dx = cxl - x, dy = y - cyb; if (dx * dx + dy * dy > r2) inside = 0; }
+            else if (inBot && x > cxr) { int dx = x - cxr, dy = y - cyb; if (dx * dx + dy * dy > r2) inside = 0; }
+            if (inside) blend_px_logical(x, y, r, g, b, a);
+        }
+    }
+}
+
+// 毛玻璃模糊 (盒式模糊): LFB 32bpp 路径, 对后台缓冲指定区域做 radius 窗口均值模糊。
+// 8bpp 路径下为空实现 (调用方走降级分支)。使用可分离两遍盒式模糊 (水平+垂直)。
+void gfx_blur_rgb(int x0, int y0, int x1, int y1, int radius) {
+    if (!g_lfb || g_bpp_bytes != 4) return;  // 仅 LFB 32bpp
+    if (radius <= 0) return;
+    if (radius > 8) radius = 8;
+    if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+    if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= g_w) x1 = g_w - 1;
+    if (y1 >= g_h) y1 = g_h - 1;
+    int w = x1 - x0 + 1;
+    int h = y1 - y0 + 1;
+    if (w <= 0 || h <= 0) return;
+
+    // 临时缓冲: 水平模糊后的中间结果 (每像素 3 字节 R,G,B)
+    size_t tmp_sz = (size_t)w * (size_t)h * 3;
+    uint8_t* tmp = (uint8_t*)kmalloc(tmp_sz);
+    if (!tmp) return;  // 内存不足, 跳过模糊
+
+    // 水平遍: 对每行做 radius 窗口滑动均值
+    for (int y = 0; y < h; y++) {
+        uint32_t* row = (uint32_t*)(g_back + (size_t)(y + y0) * g_buf_pitch);
+        int sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+        // 初始化窗口 [0, radius]
+        for (int k = 0; k <= radius && k < w; k++) {
+            uint32_t px = row[x0 + k];
+            sumR += (px >> g_rshift) & 0xFF;
+            sumG += (px >> g_gshift) & 0xFF;
+            sumB += (px >> g_bshift) & 0xFF;
+            cnt++;
+        }
+        for (int x = 0; x < w; x++) {
+            uint8_t* t = tmp + ((size_t)y * w + x) * 3;
+            t[0] = (uint8_t)(sumR / cnt);
+            t[1] = (uint8_t)(sumG / cnt);
+            t[2] = (uint8_t)(sumB / cnt);
+            // 滑动窗口: 移出左端, 移入右端
+            int xOut = x - radius;
+            int xIn  = x + radius + 1;
+            if (xOut >= 0) {
+                uint32_t px = row[x0 + xOut];
+                sumR -= (px >> g_rshift) & 0xFF;
+                sumG -= (px >> g_gshift) & 0xFF;
+                sumB -= (px >> g_bshift) & 0xFF;
+                cnt--;
+            }
+            if (xIn < w) {
+                uint32_t px = row[x0 + xIn];
+                sumR += (px >> g_rshift) & 0xFF;
+                sumG += (px >> g_gshift) & 0xFF;
+                sumB += (px >> g_bshift) & 0xFF;
+                cnt++;
+            }
+        }
+    }
+
+    // 垂直遍: 对每列做 radius 窗口滑动均值, 写回后台缓冲
+    for (int x = 0; x < w; x++) {
+        int sumR = 0, sumG = 0, sumB = 0, cnt = 0;
+        for (int k = 0; k <= radius && k < h; k++) {
+            uint8_t* t = tmp + ((size_t)k * w + x) * 3;
+            sumR += t[0]; sumG += t[1]; sumB += t[2]; cnt++;
+        }
+        for (int y = 0; y < h; y++) {
+            uint32_t* px = (uint32_t*)(g_back + (size_t)(y + y0) * g_buf_pitch);
+            px[x0 + x] = pack_rgb((uint8_t)(sumR / cnt), (uint8_t)(sumG / cnt), (uint8_t)(sumB / cnt));
+            int yOut = y - radius;
+            int yIn  = y + radius + 1;
+            if (yOut >= 0) {
+                uint8_t* t = tmp + ((size_t)yOut * w + x) * 3;
+                sumR -= t[0]; sumG -= t[1]; sumB -= t[2]; cnt--;
+            }
+            if (yIn < h) {
+                uint8_t* t = tmp + ((size_t)yIn * w + x) * 3;
+                sumR += t[0]; sumG += t[1]; sumB += t[2]; cnt++;
+            }
+        }
+    }
+
+    kfree(tmp);
 }
 
 // 抗锯齿直线 (Wu): 边缘像素按覆盖度混合
@@ -788,15 +1133,31 @@ void gfx_disc_aa(int cx, int cy, int rr, uint8_t r, uint8_t g, uint8_t b) {
     if (!g_lfb) {
         uint8_t idx = rgb_to_idx(r, g, b);
         int r2 = rr * rr;
-        for (int y = -rr; y <= rr; y++)
-            for (int x = -rr; x <= rr; x++)
+        int y0 = -rr, y1 = rr, x0 = -rr, x1 = rr;
+        if (g_clip_on && g_clip_x1 >= g_clip_x0) {   // 循环级裁剪 (mode13h)
+            int cy0 = g_clip_y0 - cy, cy1 = g_clip_y1 - cy;
+            int cx0 = g_clip_x0 - cx, cx1 = g_clip_x1 - cx;
+            if (y0 < cy0) y0 = cy0; if (y1 > cy1) y1 = cy1;
+            if (x0 < cx0) x0 = cx0; if (x1 > cx1) x1 = cx1;
+            if (y0 > y1 || x0 > x1) return;
+        }
+        for (int y = y0; y <= y1; y++)
+            for (int x = x0; x <= x1; x++)
                 if (x * x + y * y <= r2) gfx_pixel_idx(cx + x, cy + y, idx);
         return;
     }
     int r2 = rr * rr;
     int r2o = (rr + 1) * (rr + 1);
-    for (int y = -rr - 1; y <= rr + 1; y++) {
-        for (int x = -rr - 1; x <= rr + 1; x++) {
+    int y0 = -rr - 1, y1 = rr + 1, x0 = -rr - 1, x1 = rr + 1;
+    if (g_clip_on && g_clip_x1 >= g_clip_x0) {   // 循环级裁剪: 仅遍历与裁剪框相交区域
+        int cy0 = g_clip_y0 - cy, cy1 = g_clip_y1 - cy;
+        int cx0 = g_clip_x0 - cx, cx1 = g_clip_x1 - cx;
+        if (y0 < cy0) y0 = cy0; if (y1 > cy1) y1 = cy1;
+        if (x0 < cx0) x0 = cx0; if (x1 > cx1) x1 = cx1;
+        if (y0 > y1 || x0 > x1) return;
+    }
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
             int d2 = x * x + y * y;
             if (d2 <= r2) gfx_pixel_rgb(cx + x, cy + y, r, g, b);
             else if (d2 <= r2o) {
@@ -990,6 +1351,136 @@ uint8_t gfx_trans_idx(uint8_t fg, uint8_t bg) {
     return bg;
 }
 
+
+// ================= 桌面壁纸缓存 (性能) =================
+// 缩放(cover) + 上下遮罩原本每帧逐像素重算 (含每像素一次 64 位除法), 在 TCG 下
+// 一帧 30 万像素的 64 位除法可达上百毫秒 —— 这是"帧率低"的主因。
+// 这里把结果烘焙进缓存, 仅在源/尺寸变化时重建; 之后每帧只做整幅内存拷贝。
+static uint32_t*       g_wall_cache = 0;
+static int             g_wall_cw = 0, g_wall_ch = 0;
+static const uint16_t* g_wall_src = 0;
+static int             g_wall_sw = 0, g_wall_sh = 0;
+
+static void gfx_wall_cache_drop(void) {
+    if (g_wall_cache) { kfree(g_wall_cache); g_wall_cache = 0; }
+    g_wall_cw = g_wall_ch = 0; g_wall_src = 0; g_wall_sw = g_wall_sh = 0;
+}
+
+static int gfx_wall_cache_build(const uint16_t* src, int sw, int sh, int dw, int dh,
+                                int top_h, int bot_h, int top_a, int bot_a,
+                                uint8_t mr, uint8_t mg, uint8_t mb) {
+    g_wall_cache = (uint32_t*)kmalloc((size_t)dw * (size_t)dh * 4u);
+    if (!g_wall_cache) return 0;
+    g_wall_cw = dw; g_wall_ch = dh; g_wall_src = src; g_wall_sw = sw; g_wall_sh = sh;
+
+    // 等比裁剪 (cover) 到目标宽高比
+    int crop_w = sw, crop_h = sh, ox = 0, oy = 0;
+    if ((uint64_t)dw * (uint64_t)sh > (uint64_t)dh * (uint64_t)sw) {
+        crop_h = (int)((uint64_t)sw * (uint64_t)dh / (uint64_t)dw);
+        if (crop_h < 1) crop_h = 1;
+        oy = (sh - crop_h) / 2;
+    } else if ((uint64_t)dw * (uint64_t)sh < (uint64_t)dh * (uint64_t)sw) {
+        crop_w = (int)((uint64_t)sh * (uint64_t)dw / (uint64_t)dh);
+        if (crop_w < 1) crop_w = 1;
+        ox = (sw - crop_w) / 2;
+    }
+    for (int y = 0; y < dh; y++) {
+        int sy = oy + (int)((uint64_t)y * (uint64_t)crop_h / (uint64_t)dh);
+        if (sy >= sh) sy = sh - 1;
+        const uint16_t* srow = src + (size_t)sy * (size_t)sw;
+        uint32_t* drow = g_wall_cache + (size_t)y * (size_t)dw;
+        int a = 0;
+        if (top_h > 0 && y <= top_h) a = top_a;
+        else if (bot_h > 0 && y >= dh - bot_h) a = bot_a;
+        for (int x = 0; x < dw; x++) {
+            int sx = ox + (int)((uint64_t)x * (uint64_t)crop_w / (uint64_t)dw);
+            if (sx >= sw) sx = sw - 1;
+            uint16_t p = srow[sx];
+            uint8_t r = (uint8_t)(((p >> 11) & 0x1F) * 255 / 31);
+            uint8_t g = (uint8_t)(((p >> 5)  & 0x3F) * 255 / 63);
+            uint8_t b = (uint8_t)((p & 0x1F) * 255 / 31);
+            uint32_t px = pack_rgb(r, g, b);
+            if (a > 0) {   // 烘焙上下遮罩 (与 gfx_fill_rgb_alpha 同公式)
+                uint8_t cr = (uint8_t)((px >> g_rshift) & 0xFF);
+                uint8_t cg = (uint8_t)((px >> g_gshift) & 0xFF);
+                uint8_t cb = (uint8_t)((px >> g_bshift) & 0xFF);
+                uint8_t R = (uint8_t)(cr + (((int)mr - cr) * a >> 8));
+                uint8_t G = (uint8_t)(cg + (((int)mg - cg) * a >> 8));
+                uint8_t B = (uint8_t)(cb + (((int)mb - cb) * a >> 8));
+                px = pack_rgb(R, G, B);
+            }
+            drow[x] = px;
+        }
+    }
+    return 1;
+}
+
+static int gfx_wall_cache_valid(const uint16_t* src, int sw, int sh, int dw, int dh) {
+    return g_wall_cache && g_wall_src == src && g_wall_sw == sw && g_wall_sh == sh &&
+           g_wall_cw == dw && g_wall_ch == dh;
+}
+
+// 呈现桌面壁纸 (LFB 32bpp): 缓存失效时重建, 随后整幅拷入后台缓冲。
+// 返回 1 = 已处理; 0 = 非 32bpp LFB 路径 (调用方走 8bpp 程序化回退)。
+int gfx_desktop_wallpaper_present(const uint16_t* src, int sw, int sh,
+                                  int top_h, int bot_h, int top_a, int bot_a,
+                                  uint8_t mr, uint8_t mg, uint8_t mb) {
+    if (!g_back || !g_lfb || g_bpp_bytes != 4) return 0;
+    int dw = g_buf_w, dh = g_buf_h;
+    if (!gfx_wall_cache_valid(src, sw, sh, dw, dh)) {
+        gfx_wall_cache_drop();
+        if (!gfx_wall_cache_build(src, sw, sh, dw, dh, top_h, bot_h, top_a, bot_a, mr, mg, mb))
+            return 1;   // 分配失败: 视作已处理(空), 避免每帧重试
+    }
+    // 脏区局部重绘: 仅拷贝裁剪框覆盖的行/列 (其余区域保留上一帧正确内容)
+    int y0 = 0, y1 = dh - 1, x0 = 0, x1 = dw - 1;
+    if (g_clip_on && g_nclip_x1 >= g_nclip_x0) {
+        if (g_nclip_y0 > y0) y0 = g_nclip_y0;
+        if (g_nclip_y1 < y1) y1 = g_nclip_y1;
+        if (g_nclip_x0 > x0) x0 = g_nclip_x0;
+        if (g_nclip_x1 < x1) x1 = g_nclip_x1;
+        if (y1 < y0 || x1 < x0) return 1;
+    }
+    for (int y = y0; y <= y1; y++) {
+        uint32_t* d = (uint32_t*)(g_back + (size_t)y * g_buf_pitch);
+        const uint32_t* s = g_wall_cache + (size_t)y * (size_t)dw;
+        for (int x = x0; x <= x1; x++) d[x] = s[x];
+    }
+    return 1;
+}
+
+void gfx_blit_rgb565_cover(const uint16_t* src, int sw, int sh, int dw, int dh) {
+    if (!src || !g_back || !g_lfb || g_bpp_bytes != 4 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    if (dw > g_buf_w) dw = g_buf_w;
+    if (dh > g_buf_h) dh = g_buf_h;
+    // Center-crop source to destination aspect ratio, then nearest-neighbor sample.
+    int crop_w = sw, crop_h = sh, ox = 0, oy = 0;
+    if ((uint64_t)dw * (uint64_t)sh > (uint64_t)dh * (uint64_t)sw) {
+        crop_h = (int)((uint64_t)sw * (uint64_t)dh / (uint64_t)dw);
+        if (crop_h < 1) crop_h = 1;
+        oy = (sh - crop_h) / 2;
+    } else if ((uint64_t)dw * (uint64_t)sh < (uint64_t)dh * (uint64_t)sw) {
+        crop_w = (int)((uint64_t)sh * (uint64_t)dw / (uint64_t)dh);
+        if (crop_w < 1) crop_w = 1;
+        ox = (sw - crop_w) / 2;
+    }
+    for (int y = 0; y < dh; ++y) {
+        int sy = oy + (int)((uint64_t)y * (uint64_t)crop_h / (uint64_t)dh);
+        if (sy >= sh) sy = sh - 1;
+        uint32_t* dst = (uint32_t*)(g_back + (size_t)y * g_buf_pitch);
+        const uint16_t* row = src + (size_t)sy * sw;
+        for (int x = 0; x < dw; ++x) {
+            int sx = ox + (int)((uint64_t)x * (uint64_t)crop_w / (uint64_t)dw);
+            if (sx >= sw) sx = sw - 1;
+            uint16_t p = row[sx];
+            uint8_t r = (uint8_t)(((p >> 11) & 0x1F) * 255 / 31);
+            uint8_t g = (uint8_t)(((p >> 5)  & 0x3F) * 255 / 63);
+            uint8_t b = (uint8_t)((p & 0x1F) * 255 / 31);
+            dst[x] = pack_rgb(r, g, b);
+        }
+    }
+}
+
 void gfx_flip(void) {
     // 后台 -> 前台, 行级脏拷贝: 逐行比较, 只有相对前台变化了的行才拷贝.
     // (静止桌面与前台完全一致 -> 全程零写屏, 消除闪烁与撕裂;
@@ -999,14 +1490,28 @@ void gfx_flip(void) {
     const size_t rb = (size_t)g_buf_pitch;   // 每行字节数 (实际缓冲跨度)
     uint8_t* f = (uint8_t*)g_front;
     const uint8_t* b = (const uint8_t*)g_back;
+    if (rb & 3u) {   // 非 4 字节对齐: 退回逐字节 (罕见)
+        for (int y = 0; y < g_buf_h; y++) {
+            uint8_t* r0 = f + (size_t)y * rb;
+            const uint8_t* r1 = b + (size_t)y * rb;
+            int same = 1;
+            for (size_t i = 0; i < rb; i++)
+                if (r0[i] != r1[i]) { same = 0; break; }
+            if (same) continue;
+            for (size_t i = 0; i < rb; i++) r0[i] = r1[i];
+        }
+        return;
+    }
+    // 以 32 位字比较/拷贝: 比较循环迭代次数降为 1/4 (TCG 下整帧开销显著下降)
+    const size_t words = rb >> 2;
     for (int y = 0; y < g_buf_h; y++) {
-        uint8_t* r0 = f + (size_t)y * rb;
-        const uint8_t* r1 = b + (size_t)y * rb;
+        uint32_t* r0 = (uint32_t*)(f + (size_t)y * rb);
+        const uint32_t* r1 = (const uint32_t*)(b + (size_t)y * rb);
         int same = 1;
-        for (size_t i = 0; i < rb; i++)
+        for (size_t i = 0; i < words; i++)
             if (r0[i] != r1[i]) { same = 0; break; }
         if (same) continue;
-        for (size_t i = 0; i < rb; i++) r0[i] = r1[i];
+        for (size_t i = 0; i < words; i++) r0[i] = r1[i];
     }
 }
 
@@ -1077,17 +1582,14 @@ void gfx_gop_present(void) {
         g_gop_pitch  = gi->pitch;
         g_gop_fmt    = gi->format;
         g_gop_fb     = (uint8_t*)(uintptr_t)gi->fb_addr;
-        // 等比定点缩放几何(16.16), 只算一次: 把 320x200 平滑铺满, 居中留黑边
-        uint64_t fscl;
-        if ((uint64_t)g_gop_w * 200 <= (uint64_t)g_gop_h * 320)
-            fscl = ((uint64_t)g_gop_w << 16) / 320;        // 宽度受限
-        else
-            fscl = ((uint64_t)g_gop_h << 16) / 200;        // 高度受限
-        g_gop_disp_w = (uint32_t)((320ULL * fscl) >> 16);
-        g_gop_disp_h = (uint32_t)((200ULL * fscl) >> 16);
-        g_gop_offx_i = (int32_t)(g_gop_w - g_gop_disp_w) / 2;
-        g_gop_offy_i = (int32_t)(g_gop_h - g_gop_disp_h) / 2;
-        g_gop_stepx  = (uint32_t)((320ULL << 16) / g_gop_disp_w);  // 源/目标 像素比
+        // 第一性原则: 桌面输出必须无黑边。旧实现把 320x200 等比缩放后
+        // 居中，1920x1080 会留下约 96px 的左右黑边。兼容镜像路径现在直接
+        // 覆盖整个 GOP 画布；正常的 UEFI/VBE LFB 路径不会进入此镜像器。
+        g_gop_disp_w = g_gop_w;
+        g_gop_disp_h = g_gop_h;
+        g_gop_offx_i = 0;
+        g_gop_offy_i = 0;
+        g_gop_stepx  = (uint32_t)((320ULL << 16) / g_gop_disp_w);
         g_gop_stepy  = (uint32_t)((200ULL << 16) / g_gop_disp_h);
         g_gop_bg_done = 0;
         g_gop_last_ms = 0;

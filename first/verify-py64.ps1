@@ -1,84 +1,30 @@
-# verify-py64.ps1 - 64 位内核 MicroPython REPL 验证脚本 v2
-# QEMU 无头模式 + monitor sendkey 注入键盘 + 串口捕获输出
-$ErrorActionPreference = "Stop"
+﻿# verify-py64.ps1 - 64 位内核 MicroPython REPL 验证 (薄转发壳)
+#
+# 原实现: 84 行 PowerShell, QEMU 无头 + monitor sendkey 注入 + 串口捕获。
+# 现实现: 转发到 fsos.py verify --smoke, 由 verify_boot.py 提供等价冒烟验证。
+#
+# 用法: .\verify-py64.ps1
+$ErrorActionPreference = 'Stop'
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$FsosPy = Join-Path $ScriptDir "tools\fsos.py"
 
-$qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
-if (-not (Test-Path $qemu)) {
-    $qemu = (Get-Command qemu-system-x86_64 -ErrorAction SilentlyContinue).Source
+# 定位 Python
+$py = Get-Command python -ErrorAction SilentlyContinue
+if (-not $py) {
+    $pyCands = @(
+        "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe",
+        "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\python.exe",
+        "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe"
+    )
+    foreach ($c in $pyCands) {
+        if (Test-Path $c) { $py = [PSCustomObject]@{ Source = $c }; break }
+    }
 }
-$dir  = "e:\project\clion\project_system\first\output"
-$img  = Join-Path $dir "image.img"
-$out  = Join-Path $dir "verify-py64"
-$port = 12397
-
-if (Test-Path $out) { Remove-Item $out -Recurse -Force -ErrorAction SilentlyContinue }
-New-Item -ItemType Directory -Path $out | Out-Null
-
-$p = Start-Process -FilePath $qemu -ArgumentList @(
-    "-drive", "file=$img,format=raw",
-    "-display", "none",
-    "-monitor", "tcp:127.0.0.1:$port,server,nowait",
-    "-serial", "file:$($out)\serial.log",
-    "-no-reboot"
-) -PassThru -NoNewWindow
-
-function Send-Mon($cmd, $delayMs = 300) {
-    $c = New-Object System.Net.Sockets.TcpClient
-    $c.Connect("127.0.0.1", $port)
-    $s = $c.GetStream()
-    $w = New-Object System.IO.StreamWriter($s)
-    $w.AutoFlush = $true
-    $w.Write($cmd + "`n")
-    Start-Sleep -Milliseconds $delayMs
-    $c.Close()
+if (-not $py) {
+    Write-Host "[!] Python not found. Install Python 3.12+ or add to PATH." -ForegroundColor Red
+    exit 4
 }
-function Send-Key($k) { Send-Mon "sendkey $k" 150 }
-function Shot($name) { Send-Mon "screendump $($out)\$name" 400 }
 
-Write-Host "[1] waiting for boot ..."
-Start-Sleep -Seconds 4
-
-Write-Host "[2] login as admin ..."
-Send-Key "ret"
-Send-Key "a"; Send-Key "d"; Send-Key "m"; Send-Key "i"; Send-Key "n"
-Send-Key "ret"
-Start-Sleep -Milliseconds 800
-
-Write-Host "[3] open terminal (T) ..."
-Send-Key "t"
-Start-Sleep -Milliseconds 800
-
-Write-Host "[4] run: python"
-Send-Key "p"; Send-Key "y"; Send-Key "t"; Send-Key "h"; Send-Key "o"; Send-Key "n"
-Send-Key "ret"
-Start-Sleep -Milliseconds 3500
-
-Write-Host "[5] repl: 1+1"
-Send-Key "1"; Send-Key "shift-equal"; Send-Key "1"
-Send-Key "ret"
-Start-Sleep -Milliseconds 1000
-
-Write-Host "[6] repl: 2*3"
-Send-Key "2"; Send-Key "shift-8"; Send-Key "3"
-Send-Key "ret"
-Start-Sleep -Milliseconds 1000
-
-Write-Host "[7] repl: print(2) with parens"
-Send-Key "p"; Send-Key "r"; Send-Key "i"; Send-Key "n"; Send-Key "t"
-Send-Key "shift-9"; Send-Key "2"; Send-Key "shift-0"
-Send-Key "ret"
-Start-Sleep -Milliseconds 1000
-
-Write-Host "[8] repl: ctrl-d exit"
-Send-Key "ctrl-d"
-Start-Sleep -Milliseconds 1000
-
-Write-Host "[9] terminal: exit"
-Send-Key "e"; Send-Key "x"; Send-Key "i"; Send-Key "t"
-Send-Key "ret"
-Start-Sleep -Milliseconds 800
-Shot "14_back.png"
-
-Send-Mon "quit" 300
-Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-Write-Host "Done. serial log in $out"
+Write-Host "[verify-py64] Forwarding to fsos.py verify --smoke ..." -ForegroundColor Cyan
+& $py.Source $FsosPy verify --smoke --timeout 30 --no-gdb
+exit $LASTEXITCODE

@@ -268,3 +268,23 @@ first/
 - 异常处理：CPU 异常 dump 寄存器现场（串口 + 屏幕）后停机，不再静默
 - MicroPython 嵌入式：`-Os` + `--gc-sections` + 紧凑链接布局，内核 610KB（引导低端缓冲容量内）
 - 定制 `setjmp/longjmp`（NASM）、`__chkstk_ms`（NASM），适配裸机 + 长模式
+
+## Modern Desktop v14
+
+The GUI shell now follows a native-resolution design instead of treating 320x200 as the desktop canvas.
+
+- UEFI GOP is the primary desktop framebuffer and prefers 1920x1080 when the firmware exposes that mode.
+- The shell uses physical screen coordinates for the desktop, windows, dock, launcher, and right-side control center.
+- Native UI CJK text uses the 24x24 glyph table at high-resolution scale and the legacy 16x16 table on smaller displays.
+- Theme colors use a dedicated native-GOP RGB token namespace so the 32bpp UI does not inherit the old VGA palette saturation.
+- The right-side control center is expandable/collapsible and keeps separate power actions.
+- Start menu provides separate `注销` and `关机` actions.
+- Terminal `poweroff`/`reboot` remain available.
+
+Build on Windows from `first` using the existing clean VMware script after installing the project's toolchain:
+
+```powershell
+.\tools\build_modern_vmware_v9.ps1
+```
+
+The generated VMware files are under `output\Auto`.

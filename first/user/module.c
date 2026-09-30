@@ -31,6 +31,11 @@ void console_emit(char c) {
     g_con_head = (g_con_head + 1) % CON_SZ;
     if (g_con_len < CON_SZ) g_con_len++;
 }
+void console_clear(void) {
+    g_con_head = 0;
+    g_con_len = 0;
+}
+
 int console_drain(char* dst, int len) {
     if (len > g_con_len) len = g_con_len;
     // 从最旧字节开始拷贝
@@ -68,6 +73,13 @@ static int   sc_file_exists(const char* name) {
 static void  sc_log(const char* s) { while (*s) s_putc(*s++); }
 static uint64_t sc_tick_ms(void) { return (uint64_t)get_ticks(); } // PIT 毫秒计数
 
+static uint32_t g_exec_deadline = 0;
+static int sc_poll(void) {
+    if (!g_exec_deadline) return 0;
+    if ((int32_t)(get_ticks() - g_exec_deadline) >= 0) return -1;
+    return 0;
+}
+
 // IEEE 802.3 CRC32 (供模块完整性校验)
 static uint32_t mod_crc32(const uint8_t* data, uint32_t len) {
     uint32_t crc = 0xFFFFFFFFu;
@@ -94,7 +106,7 @@ static int ata_read_chunked(uint32_t lba, uint32_t nsec, void* buf) {
 static mod_syscalls_t g_sc = {
     sc_malloc, sc_free, sc_putc, sc_puts,
     sc_file_read, sc_file_write, sc_file_list, sc_file_exists,
-    sc_log, sc_tick_ms
+    sc_log, sc_tick_ms, sc_poll
 };
 
 // ---- 载入并运行 ----
@@ -144,7 +156,11 @@ static int do_load(const char* which, uintptr_t va, uint32_t lba,
     // 5) 跳入入口执行
     typedef int (*entry_fn_t)(const void*, const char*, const char*);
     entry_fn_t entry = (entry_fn_t)(uintptr_t)(va + h->entry_off);
+    // 解释器是协作式的：模块循环通过 sc->poll() 检查时间预算，
+    // 防止一个错误的 while(1) 把整个桌面线程永久锁死。
+    g_exec_deadline = get_ticks() + 10000;
     int rc = entry(&g_sc, src, proc_name);
+    g_exec_deadline = 0;
 
     // 6) 运行后释放: 仅清零实际使用区域, 空闲内核零占用
     for (uint64_t i = 0; i < (uint64_t)total * 512; i++) p[i] = 0;

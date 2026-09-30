@@ -1,15 +1,15 @@
 // filesys.h - FSOS 扁平文件区 (内核层 API)
 //
 // 磁盘布局 (见 layout.h):
-//   目录: LBA_FS_DIR  (1 扇区, 16 个目录项)
-//   数据: LBA_FS_DATA (128 扇区, 每文件固定 8 扇区 = 4KB)
+//   目录: LBA_FS_DIR  (FS_DIR_SECS=4 扇区, FS_MAX_FILES=64 个目录项)
+//   数据: LBA_FS_DATA (FS_DATA_SECS=2048 扇区, 每文件最多 FS_FILE_SECS=32 扇区 = 16KB)
 //
 // 历史: 这套实现原先是 MicroPython 端口 (krn_bridge.c) 里的 static 代码,
 // 只有 Python 能用; 内核 C 侧 (桌面应用/编辑器) 拿不到文件。这里提到内核层,
 // **磁盘格式保持逐字节一致**, 因此旧磁盘上已存的文件仍然可读可写。
 //
-// 适用: 纯文本工程文件 (.py / .c / .java / .txt ...), 单文件 <= 4KB,
-// 最多 16 个文件 —— 这是 320x200 教学内核的合理容量。
+// 适用: 文本/二进制工程文件 (.py / .c / .java / .txt / .elf ...), 单文件 <= 16KB,
+// 最多 64 个文件。二进制文件请用 fs_read_bin/fs_write_bin (首 4 字节存长度)。
 #ifndef FILESYS_H
 #define FILESYS_H
 
@@ -37,6 +37,13 @@ int  fs_list(char names[][FS_NAME_SZ], int max);
 int  fs_read(const char* name, char* buf, int cap);
 // 写文件 (覆盖或新建), 0 成功; <0 失败 (-3 目录满, -4 数据区满)
 int  fs_write(const char* name, const char* data);
+// 二进制读/写 (按精确长度, 不依赖 NUL 终止; 数据区首 4 字节存小端长度)。
+// 用于 ELF 等含 NUL 的二进制文件。返回字节数或 <0 错误码。
+int  fs_read_bin(const char* name, char* buf, int cap);
+int  fs_write_bin(const char* name, const char* data, int len);
+// 二进制读/写的内核层实现 (针对某个目录块), 供 *_in 调用者与外部复用。
+int  fs_read_bin_in(uint32_t dir_lba, const char* name, char* buf, int cap);
+int  fs_write_bin_in(uint32_t dir_lba, const char* name, const char* data, int len);
 // 删除文件 (释放目录项), 0 成功
 int  fs_remove(const char* name);
 // 重命名 (文件或目录), 0 成功; <0 失败 (-1 不存在, -3 目标名已存在)

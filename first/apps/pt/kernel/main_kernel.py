@@ -59,12 +59,20 @@ _bt_prev_left = False
 
 def _bt_append(text):
     for ln in (text or '').split('\n'):
+        if not ln:
+            _bt_lines.append('')
+            continue
+        # 高分辨率终端按当前列宽换行，避免输出被屏幕裁切。
+        while len(ln) > _BT_COLS:
+            _bt_lines.append(ln[:_BT_COLS])
+            ln = ln[_BT_COLS:]
         _bt_lines.append(ln)
     if len(_bt_lines) > 1000:
         del _bt_lines[:-1000]
 
 
 def _bt_draw():
+    _bt_refresh_geometry()
     krn.term_clear()
     start = len(_bt_lines) - (_BT_ROWS - 1)
     if start < 0:
@@ -90,6 +98,7 @@ def _bt_draw():
 
 def _bt_input():
     global _bt_inrow, _bt_inbuf, _bt_prev_left
+    _bt_refresh_geometry()
     _bt_inbuf = ''
     _bt_inrow = _BT_ROWS - 1
     _bt_draw()
@@ -128,6 +137,7 @@ def _bt_input():
 def run():
     global _bt_lines, _bt_inrow, _bt_inbuf
     setup()
+    _bt_refresh_geometry()
     _bt_lines = []
     _bt_append(BANNER)
     while True:

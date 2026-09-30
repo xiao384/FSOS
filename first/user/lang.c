@@ -21,7 +21,7 @@ static int py_init(void) { return 0; }
 static int py_run(const char* src, const char* proc_name) {
     (void)proc_name;
     if (src) return mp_fsos_run_str(src);   // 来自"开发"应用的 .py 文件
-    mp_fsos_run(MP_MODE_REPL);              // 交互式 Python
+    mp_fsos_run_buffered();                 // T4.2: 交互式 Python (缓冲式, 不清屏)
     return 0;
 }
 static void py_shutdown(void) { /* REPL 退出即释放 */ }

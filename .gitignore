@@ -48,3 +48,13 @@ __pycache__/
 
 # Generated ISO directory
 iso/
+
+# reference snapshot, not part of build (moved out of version control)
+first/_ref/
+
+# CMake/CLion generated build dir
+cmake-build-debug/
+# ---- 备份目录 / 临时调试脚本 (不入版本库) ----
+first_bak_20260920/
+first/tools/_*.py
+nul

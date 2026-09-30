@@ -7,6 +7,7 @@
 typedef struct {
     int x, y;            // 已钳制到屏幕的坐标
     int dx, dy;          // 自上次 mouse_get 的累计位移
+    int wheel;           // 自上次 mouse_get 的滚轮增量: 正=上滚, 负=下滚
     uint8_t left, right, middle;
     uint8_t present;     // 初始化是否成功 (1=已启用)
 } mouse_state_t;

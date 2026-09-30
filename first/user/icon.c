@@ -2,9 +2,16 @@
 // 双路径: 磁盘文件区 (icon_draw) + 程序化内嵌回退 (icon_draw_builtin)
 #include "icon.h"
 #include "vga.h"
+#include "theme.h"      // ICN_RADIUS, RADIUS_CTRL (modern_ui 图标模板)
 #include "filesys.h"
 
 // ---- 磁盘加载 ----
+// 越界索引降级: 未登记索引映射到最近登记色, 防止乱码 (spec 5.1.3.1)
+static uint8_t icon_sanitize(uint8_t idx) {
+    if (idx <= COL_UI_DOCK_HI_SOFT) return idx;  // 0..165 均已登记
+    return COL_DGRAY;                              // 166..255 退化为深灰
+}
+
 int icon_draw(const char* name, int x, int y) {
     static char buf[FS_MAX_SIZE];
     int n = fs_read(name, buf, FS_MAX_SIZE);
@@ -17,23 +24,38 @@ int icon_draw(const char* name, int x, int y) {
     const uint8_t* px = (const uint8_t*)(buf + 8);
     for (int row = 0; row < h; row++)
         for (int col = 0; col < w; col++)
-            vga_pixel(x + col, y + row, px[row * w + col]);
+            vga_pixel(x + col, y + row, icon_sanitize(px[row * w + col]));
     return 1;
 }
 
-// ---- 程序化绘制辅助 ----
+// ---- 程序化绘制辅助 (AA 双模式分派) ----
 static void icon_bg(int x, int y, uint8_t c) {
-    vga_fill_rect(x, y, x + ICON_SIZE - 1, y + ICON_SIZE - 1, c);
+    if (gfx_is_lfb()) {
+        uint8_t cr, cg, cb; gfx_idx_rgb(c, &cr, &cg, &cb);
+        gfx_fill_round_rgb_aa(x, y, x + ICON_SIZE - 1, y + ICON_SIZE - 1, ICN_RADIUS, cr, cg, cb);
+    } else {
+        vga_fill_round_rect(x, y, x + ICON_SIZE - 1, y + ICON_SIZE - 1, ICN_RADIUS, c);
+    }
 }
 static void icon_border(int x, int y, uint8_t c) {
-    vga_draw_rect(x, y, x + ICON_SIZE - 1, y + ICON_SIZE - 1, c);
+    if (gfx_is_lfb()) {
+        uint8_t cr, cg, cb; gfx_idx_rgb(c, &cr, &cg, &cb);
+        gfx_round_rect_rgb_aa(x, y, x + ICON_SIZE - 1, y + ICON_SIZE - 1, ICN_RADIUS, cr, cg, cb);
+    } else {
+        vga_draw_round_rect(x, y, x + ICON_SIZE - 1, y + ICON_SIZE - 1, ICN_RADIUS, c);
+    }
 }
-// 画实心圆 (近似, 半径 r, 中心 cx,cy)
+// 画实心圆 (AA in LFB, 索引 in 8bpp)
 static void icon_disc(int cx, int cy, int r, uint8_t c) {
-    for (int dy = -r; dy <= r; dy++)
-        for (int dx = -r; dx <= r; dx++)
-            if (dx * dx + dy * dy <= r * r)
-                vga_pixel(cx + dx, cy + dy, c);
+    if (gfx_is_lfb()) {
+        uint8_t cr, cg, cb; gfx_idx_rgb(c, &cr, &cg, &cb);
+        gfx_disc_aa(cx, cy, r, cr, cg, cb);
+    } else {
+        for (int dy = -r; dy <= r; dy++)
+            for (int dx = -r; dx <= r; dx++)
+                if (dx * dx + dy * dy <= r * r)
+                    vga_pixel(cx + dx, cy + dy, c);
+    }
 }
 // 画圆环 (外径 r, 线宽 1)
 static void icon_ring(int cx, int cy, int r, uint8_t c) {
@@ -112,4 +134,9 @@ int icon_draw_builtin(int id, int x, int y) {
 int icon_draw_auto(const char* name, int id, int x, int y) {
     if (name && icon_draw(name, x, y)) return 1;
     return icon_draw_builtin(id, x, y);
+}
+// 统一图标模板渲染 (modern_ui): 委托内嵌图标绘制, AA/混色分派在 icon_bg/border/disc 内集中.
+// kind 0..5 映射到 ICON_* 内嵌图标; kind 6+ 保留扩展 (wm 桌面图标暂留 wm.c draw_icon).
+void icon_render(int kind, int x, int y) {
+    icon_draw_builtin(kind, x, y);
 }

@@ -18,6 +18,9 @@ void editor_open_file_in(const char* name, uint32_t dir);
 void editor_draw(int x, int y, int w, int h);
 // 键盘事件 (焦点窗口时由 wm 转发); 返回 1 表示该键已被本窗口消费
 int  editor_key(int k);
+void editor_close(void);
+// 重置编辑器状态；窗口关闭时调用。
+void editor_close(void);
 // 鼠标事件 (wm 在点击落到本窗口客户区时转发): x,y 为屏幕坐标, ldown=1 表示按下边沿
 int  editor_on_mouse(int x, int y, int ldown);
 // 周期性回调: 返回 1 表示本窗口需要重绘(用于光标闪烁)

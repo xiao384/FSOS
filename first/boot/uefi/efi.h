@@ -236,7 +236,7 @@ static const EFI_GUID gEfiGraphicsOutputProtocolGuid =
 // UEFI 下固件用 GOP 把显卡置于线性帧缓冲模式; 实测此时 legacy VGA 已经不连着屏幕
 // (往 0xB8000 文本显存写字符不会上屏, mode 13h 也不显示)。因此屏幕的唯一通道是
 // GOP 帧缓冲, 引导器必须在 ExitBootServices 之前把它取出来交给内核。
-typedef struct {
+typedef struct EFI_GRAPHICS_OUTPUT_MODE_INFORMATION {
     UINT32    Version;
     UINT32    HorizontalResolution;
     UINT32    VerticalResolution;
@@ -254,12 +254,26 @@ typedef struct {
     UINTN     FrameBufferSize;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
 
-typedef struct {
-    void*     QueryMode;
-    void*     SetMode;
-    void*     Blt;
+typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL EFI_GRAPHICS_OUTPUT_PROTOCOL;
+typedef EFI_STATUS (*EFI_GOP_QUERY_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL* This, UINT32 ModeNumber, UINTN* SizeOfInfo, EFI_GRAPHICS_OUTPUT_MODE_INFORMATION** Info);
+typedef EFI_STATUS (*EFI_GOP_SET_MODE)(EFI_GRAPHICS_OUTPUT_PROTOCOL* This, UINT32 ModeNumber);
+struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
+    EFI_GOP_QUERY_MODE QueryMode;
+    EFI_GOP_SET_MODE SetMode;
+    void* Blt;
     EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE* Mode;
-} EFI_GRAPHICS_OUTPUT_PROTOCOL;
+};
+
+typedef struct { EFI_GUID VendorGuid; void* VendorTable; } EFI_CONFIGURATION_TABLE;
+#define EFI_ACPI_20_TABLE_GUID_DATA1 0x8868E871UL
+#define EFI_ACPI_20_TABLE_GUID_DATA2 0xE4F1U
+#define EFI_ACPI_20_TABLE_GUID_DATA3 0x11D3U
+#define EFI_ACPI_20_TABLE_GUID_D4 {0xBC,0x22,0x00,0x80,0xC7,0x3C,0x88,0x81}
+#define EFI_ACPI_10_TABLE_GUID_DATA1 0xEB9D2D30UL
+#define EFI_ACPI_10_TABLE_GUID_DATA2 0x2D88U
+#define EFI_ACPI_10_TABLE_GUID_DATA3 0x11D3U
+#define EFI_ACPI_10_TABLE_GUID_D4 {0x9A,0x16,0x00,0x90,0x27,0x3F,0xC1,0x4D}
+#define ACPI_RSDP_COPY_ADDR 0x6500UL
 
 // 交给内核的显示信息块: 引导器写在物理 GOP_INFO_ADDR, 内核 gfx.c 读取。
 // (复用内核原本留给 VBE 信息的 0x6400; BIOS 路径无人写它, 内核会走 mode13h 回退)
@@ -273,6 +287,7 @@ typedef struct {
     uint32_t bpp;
     uint32_t format;     // GOP PixelFormat: 0=RGBX 1=BGRX
     uint64_t fb_addr;
+    uint64_t acpi_rsdp;  // UEFI configuration table 中的 ACPI RSDP 地址
 } gop_info_t;
 
 #define EFI_FILE_MODE_READ   0x0000000000000001ULL

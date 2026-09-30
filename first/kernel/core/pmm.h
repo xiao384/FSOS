@@ -19,4 +19,10 @@ uint64_t pmm_alloc_frame(void);
 // 释放一页 (bump 分配器不回收, 此处仅为接口完整性保留)
 void     pmm_free_frame(uint64_t pa);
 
+// 真实物理内存总量/已用 (e820 检测, 由 kernel_main 设置总量)
+void     pmm_set_phys_total(uint64_t total);
+uint64_t phys_mem_total_bytes(void);   // 真实 RAM 总量 (检测失败回退 256MB)
+uint64_t phys_mem_used_bytes(void);    // 内核镜像 + 堆 + 已分配物理帧
+uint64_t pmm_allocated_bytes(void);    // 已分配给用户进程的物理帧字节数
+
 #endif // PMM_H

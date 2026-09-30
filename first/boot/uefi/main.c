@@ -104,44 +104,63 @@ static void set_cr3(uint64_t v) { __asm__ volatile("mov %0,%%cr3" :: "r"(v)); }
 // 都不上屏, 连把 SVGA 切回 VGA 仿真也不行。所以必须在 ExitBootServices 之前取到
 // 帧缓冲地址/分辨率/格式, 写到内核约定的 0x6400, 由内核呈现 (present) 画面。
 static gop_info_t* g_gop_info = 0;
+static uint64_t g_acpi_rsdp = 0;
+
+static const EFI_GUID gAcpi20Guid = {EFI_ACPI_20_TABLE_GUID_DATA1,EFI_ACPI_20_TABLE_GUID_DATA2,EFI_ACPI_20_TABLE_GUID_DATA3,EFI_ACPI_20_TABLE_GUID_D4};
+static const EFI_GUID gAcpi10Guid = {EFI_ACPI_10_TABLE_GUID_DATA1,EFI_ACPI_10_TABLE_GUID_DATA2,EFI_ACPI_10_TABLE_GUID_DATA3,EFI_ACPI_10_TABLE_GUID_D4};
+
+static void query_acpi_rsdp(void){
+    g_acpi_rsdp=0;
+    if(!gST||!gST->ConfigurationTable)return;
+    EFI_CONFIGURATION_TABLE* t=(EFI_CONFIGURATION_TABLE*)gST->ConfigurationTable;
+    for(UINTN i=0;i<gST->NumberOfTableEntries;i++){
+        void* p=t[i].VendorTable;
+        if((guid_eq(&t[i].VendorGuid,&gAcpi20Guid)||guid_eq(&t[i].VendorGuid,&gAcpi10Guid))&&p){
+            const uint8_t* r=(const uint8_t*)p;
+            if(r[0]=='R'&&r[1]=='S'&&r[2]=='D'&&r[3]==' '&&r[4]=='P'&&r[5]=='T'&&r[6]=='R'&&r[7]==' '){
+                uint32_t n=(r[15]>=2)?36:20;
+                for(uint32_t j=0;j<n;j++) ((volatile uint8_t*)(uintptr_t)ACPI_RSDP_COPY_ADDR)[j]=r[j];
+                g_acpi_rsdp=ACPI_RSDP_COPY_ADDR;
+                uart_puts("[UEFI] ACPI RSDP copied\n");
+                return;
+            }
+        }
+    }
+}
 
 static void query_gop(void) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL* gop = 0;
-    gBS->HandleProtocol(gST->ConsoleOutHandle,
-                        (EFI_GUID*)&gEfiGraphicsOutputProtocolGuid, (void**)&gop);
+    gBS->HandleProtocol(gST->ConsoleOutHandle,(EFI_GUID*)&gEfiGraphicsOutputProtocolGuid,(void**)&gop);
     if (!gop) {
-        // 回退: 固件未必把 GOP 装在 ConOut 句柄上 (不同固件/分辨率策略有别),
-        // 枚举全部带 GraphicsOutput 协议的句柄取第一个可用者。
-        UINTN n = 0;
-        EFI_HANDLE* buf = 0;
-        if (gBS->LocateHandleBuffer(1 /*ByProtocol*/, (EFI_GUID*)&gEfiGraphicsOutputProtocolGuid,
-                                    0, &n, &buf) == EFI_SUCCESS && n && buf) {
-            for (UINTN i = 0; i < n; i++) {
-                void* g2 = 0;
-                if (gBS->HandleProtocol(buf[i], (EFI_GUID*)&gEfiGraphicsOutputProtocolGuid,
-                                        &g2) == EFI_SUCCESS && g2) { gop = (EFI_GRAPHICS_OUTPUT_PROTOCOL*)g2; break; }
-            }
+        UINTN n=0; EFI_HANDLE* buf=0;
+        if(gBS->LocateHandleBuffer(1,(EFI_GUID*)&gEfiGraphicsOutputProtocolGuid,0,&n,&buf)==EFI_SUCCESS&&buf){
+            for(UINTN i=0;i<n;i++){void* g2=0;if(gBS->HandleProtocol(buf[i],(EFI_GUID*)&gEfiGraphicsOutputProtocolGuid,&g2)==EFI_SUCCESS&&g2){gop=(EFI_GRAPHICS_OUTPUT_PROTOCOL*)g2;break;}}
             gBS->FreePool(buf);
         }
     }
-    if (!gop || !gop->Mode || !gop->Mode->Info || !gop->Mode->FrameBufferBase) {
-        uart_puts("[UEFI] GOP not available (display will stay black)\n");
-        return;
+    if(!gop||!gop->Mode||!gop->Mode->Info||!gop->Mode->FrameBufferBase){uart_puts("[UEFI] GOP not available\n");return;}
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* best=0; UINT32 bestMode=gop->Mode->Mode; UINTN bestScore=0;
+    for(UINT32 m=0;m<gop->Mode->MaxMode;m++){
+        UINTN sz=0; EFI_GRAPHICS_OUTPUT_MODE_INFORMATION* inf=0;
+        if(!gop->QueryMode)break;
+        EFI_STATUS st=gop->QueryMode(gop,m,&sz,&inf);
+        if(st!=EFI_SUCCESS||!inf)continue;
+        UINT32 w=inf->HorizontalResolution,h=inf->VerticalResolution;
+        if(inf->PixelFormat==3||w<640||h<480){gBS->FreePool(inf);continue;}
+        UINT64 area=(UINT64)w*h; int is16_9=(w*9>=h*16-8&&w*9<=h*16+8);
+        UINTN score=0;
+        if(w==1920&&h==1080)score=0xFFFFFFFFu;
+        else if(w<=1920&&h<=1080)score=(is16_9?0x80000000u:0x40000000u)+(UINTN)(area>0x3FFFFFFFu?0:area);
+        else score=(UINTN)(area>0x1FFFFFFFu?1:area);
+        if(!best||score>bestScore){if(best)gBS->FreePool(best);best=inf;bestMode=m;bestScore=score;}else gBS->FreePool(inf);
+        if(score==0xFFFFFFFFu)break;
     }
-    gop_info_t* gi = (gop_info_t*)(uintptr_t)GOP_INFO_ADDR;
-    gi->magic   = GOP_INFO_MAGIC;
-    gi->width   = gop->Mode->Info->HorizontalResolution;
-    gi->height  = gop->Mode->Info->VerticalResolution;
-    gi->pitch   = gop->Mode->Info->PixelsPerScanLine * 4;    // 32bpp
-    gi->bpp     = 32;
-    gi->format  = gop->Mode->Info->PixelFormat;
-    gi->fb_addr = (uint64_t)gop->Mode->FrameBufferBase;
-    g_gop_info = gi;
-    uart_puts("[UEFI] GOP ");
-    uart_puthex(gi->width); uart_puts("x"); uart_puthex(gi->height);
-    uart_puts(" fmt="); uart_puthex(gi->format);
-    uart_puts(" fb="); uart_puthex(gi->fb_addr);
-    uart_puts("\n");
+    if(best && gop->SetMode && bestMode!=gop->Mode->Mode){if(gop->SetMode(gop,bestMode)==EFI_SUCCESS)uart_puts("[UEFI] GOP mode selected\n");}
+    if(best)gBS->FreePool(best);
+    gop_info_t* gi=(gop_info_t*)(uintptr_t)GOP_INFO_ADDR;
+    gi->magic=GOP_INFO_MAGIC;gi->width=gop->Mode->Info->HorizontalResolution;gi->height=gop->Mode->Info->VerticalResolution;
+    gi->pitch=gop->Mode->Info->PixelsPerScanLine*4;gi->bpp=32;gi->format=gop->Mode->Info->PixelFormat;gi->fb_addr=(uint64_t)gop->Mode->FrameBufferBase;gi->acpi_rsdp=g_acpi_rsdp;
+    g_gop_info=gi;uart_puts("[UEFI] GOP ");uart_puthex(gi->width);uart_puts("x");uart_puthex(gi->height);uart_puts(" fmt=");uart_puthex(gi->format);uart_puts("\n");
 }
 
 // 从 ESP 文件系统读取内核文件到 0x100000, 返回内核字节数 (<=0 表示失败)
@@ -294,6 +313,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE* SystemTable
     uart_puts("[UEFI] efi_main start\n");
 
     // 0) 取 GOP 帧缓冲信息 (必须在 ExitBootServices 之前; 之后内核只能靠它出画面)
+    query_acpi_rsdp();
     query_gop();
 
     // 1) 从 ESP 文件系统按文件名加载内核 (OS 文件式引导)

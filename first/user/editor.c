@@ -7,10 +7,12 @@
 // 文件落在内核文件区 (filesys.h): 最多 16 个、每个 <= 4KB、纯文本, 重启不丢。
 // 所有 GUI 应用编译进内核 (first/user/*.c), 无需独立进程。
 #include "editor.h"
+#include "window.h"   // GUI window lifecycle: GUI_KEY_CLOSE
 #include "filesys.h"
 #include "layout.h"
 #include "gfx.h"
 #include "vga.h"
+#include "theme_api.h"   // gui_framework Phase 10: Theme API 集成点
 #include "cjk.h"
 #include "lang.h"
 #include "kb.h"
@@ -200,6 +202,18 @@ static void close_tab(void){
     if(g_cur<0) g_cur=0;
 }
 
+void editor_close(void){
+    for(int i=0;i<ED_MAX_TABS;i++){
+        g_tabs[i].name[0]=0;
+        g_tabs[i].len=0;
+        g_tabs[i].pos=0;
+        g_tabs[i].top=0;
+        g_tabs[i].dirty=0;
+    }
+    g_ntabs=0; g_cur=0; g_mode=ED_NORMAL; g_flen=0; g_filter[0]=0;
+    g_msg[0]=0; g_skip=0;
+}
+
 // ---------------- 命令面板 / 快速打开 ----------------
 static const char* CMD[] = {
     "保存 (Ctrl+S)","另存为","新建文件 (Ctrl+N)","打开文件 (Ctrl+P)",
@@ -283,7 +297,7 @@ static int normal_key(int k){
     if(k==14){ start_name(0); return 1; }    // Ctrl+N 新建
     if(k==18){ run_active(); return 1; }     // Ctrl+R 运行
     if(k==23){ close_tab(); return 1; }      // Ctrl+W 关闭标签
-    if(g_ntabs==0){ if(k==27) return 0; return 1; } // 无标签时吞掉除 ESC 外按键
+    if(g_ntabs==0){ if(k==27) return GUI_KEY_CLOSE; return 1; } // 无标签时 ESC 关闭编辑器窗口
 
     ed_tab_t* t=A();
     if(k==27){ g_msg[0]=0; return 1; }       // ESC 不清空编辑, 仅消提示

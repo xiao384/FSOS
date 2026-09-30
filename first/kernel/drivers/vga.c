@@ -3,7 +3,7 @@
 // 由 UI 循环的 gfx_flip() 翻到前台。mode13h/LFB 路径对调用者透明。
 #include "vga.h"
 #include "io.h"
-#include "gfx.h"       // gfx_font_scale() 字体缩放
+#include "gfx.h"       // gfx_font_scale() / gfx_scale()
 #include <stddef.h>
 // UEFI 无 int10h 时 0xB0000 (VGA/MMIO 窗口) 读回的字形不可靠, 改用内核内置字体
 // (boot/uefi/font8x8.h 的 g_font8x8[96][8], 按 ch-0x20 索引), BIOS/UEFI 路径一致。
@@ -46,7 +46,23 @@ void vga_draw_rect(int x0, int y0, int x1, int y1, uint8_t c) {
     vga_fill_rect(x1, y0, x1, y1, c);
 }
 
+void vga_fill_round_rect(int x0, int y0, int x1, int y1, int r, uint8_t c) {
+    gfx_fill_round_idx(x0, y0, x1, y1, r, c);
+}
+
+void vga_draw_round_rect(int x0, int y0, int x1, int y1, int r, uint8_t c) {
+    gfx_round_rect_idx(x0, y0, x1, y1, r, c);
+}
+
 void vga_draw_char(int x, int y, char ch, uint8_t fg, uint8_t bg) {
+    // UEFI 原生路径 (g_scale>1): 走抗锯齿字形 (直接写原生缓冲, 内部按 scale 放大)
+    if (gfx_scale() > 1) {
+        uint8_t fr, fgg, fb, br, bgg, bb;
+        gfx_idx_rgb(fg, &fr, &fgg, &fb);
+        gfx_idx_rgb(bg, &br, &bgg, &bb);
+        gfx_draw_char_aa(x, y, ch, fr, fgg, fb, br, bgg, bb);
+        return;
+    }
     const uint8_t* font = (const uint8_t*)g_font8x8;   // 内置字体, 按 (ch-0x20)*8 索引
     if ((uint8_t)ch >= 128) ch = '?';
     if ((uint8_t)ch < 0x20) ch = 0x20;                 // 控制字符 -> 空白 (原 0xB0000 空区)
@@ -65,10 +81,10 @@ void vga_draw_char(int x, int y, char ch, uint8_t fg, uint8_t bg) {
 }
 
 void vga_draw_text(int x, int y, const char* s, uint8_t fg, uint8_t bg) {
-    int sc = gfx_font_scale();
+    int native = gfx_scale() > 1;
     while (*s) {
         vga_draw_char(x, y, *s, fg, bg);
-        x += FONT_W * sc;
+        x += native ? 8 : (8 * gfx_font_scale());   // 原生: 逻辑步长 8 (字形内已完成 scale)
         s++;
     }
 }
@@ -81,7 +97,32 @@ void vga_draw_text_center(int y, const char* s, uint8_t fg, uint8_t bg) {
 int vga_text_w(const char* s) {
     int n = 0;
     while (*s) { n++; s++; }
-    return n * FONT_W * gfx_font_scale();
+    // gfx_scale()>1 表示“逻辑坐标 -> 实际坐标”的后级放大；
+    // GOP 原生路径则由 gfx_font_scale() 直接把 8x8 字形放大到物理像素。
+    int sc = (gfx_scale() > 1) ? 1 : gfx_font_scale();
+    if (sc < 1) sc = 1;
+    return n * FONT_W * sc;
 }
 
 int vga_font_valid(void) { return font_ok; }
+// ---- 现代 UI 渐变与混色委托层 (modern_ui) ----
+void vga_gradient_v(int x0, int y0, int x1, int y1, uint8_t s, uint8_t e) {
+    if (gfx_is_lfb()) {
+        uint8_t r1, g1, b1, r2, g2, b2;
+        gfx_idx_rgb(s, &r1, &g1, &b1);
+        gfx_idx_rgb(e, &r2, &g2, &b2);
+        gfx_gradient_v_rgb(x0, y0, x1, y1, r1, g1, b1, r2, g2, b2);
+    } else {
+        gfx_gradient_v_idx(x0, y0, x1, y1, s, e);
+    }
+}
+
+void vga_alpha_over(int x, int y, uint8_t idx, int alpha) {
+    if (gfx_is_lfb()) {
+        uint8_t r, g, b;
+        gfx_idx_rgb(idx, &r, &g, &b);
+        gfx_alpha_over_rgb(x, y, r, g, b, alpha);
+    } else {
+        if (alpha >= 128) gfx_pixel_idx(x, y, idx);
+    }
+}

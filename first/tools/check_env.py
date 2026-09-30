@@ -106,7 +106,9 @@ def main():
     line('')
 
     stdlib = ['json', 'os', 'platform', 'subprocess', 'random',
-              'shutil', 'sys', 'time', 'winreg']
+              'shutil', 'sys', 'time']
+    if os.name == 'nt':
+        stdlib.append('winreg')
     r1 = check_stdlib(stdlib)
     line('')
     r2 = check_pyside6()

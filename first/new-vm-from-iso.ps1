@@ -1,12 +1,10 @@
-# new-vm-from-iso.ps1
+# new-vm-from-iso.ps1  [遗留 - VMware 专用, 无 fsos.py 等价子命令]
 #
-# Create a "boot-from-CD-and-install" VMware virtual machine from the existing
-# FSOS.iso, similar to installing Windows from a setup disc:
-#   create VM -> blank hard disk -> attach CD/DVD to the ISO -> boot from CD ->
-#   graphical installer writes the OS to the disk -> reboot from hard disk.
-#
-# After install completes, run  .\set-boot-hdd.ps1  to switch the boot order
-# back to the hard disk (or use VMware's firmware boot menu).
+# 此脚本创建 "从 CD 启动并安装" 的 VMware 虚拟机: 新建 VM -> 空白硬盘 ->
+# 挂载 ISO -> 从 CD 启动 -> 图形安装器把 OS 写入硬盘 -> 重启从硬盘启动。
+# 这是 VMware Workstation/Player 专用的辅助工具, fsos.py 未提供等价子命令
+# (design §2.4.3: VMware 专属步骤不在跨平台统一驱动范围内)。
+# ISO 打包请用: python tools/fsos.py pack --iso
 #
 # Usage:
 #   .\new-vm-from-iso.ps1                 # uses ../iso/FSOS.iso, output/vmware-iso/

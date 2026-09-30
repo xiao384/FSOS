@@ -606,7 +606,7 @@ def valid_file_name(name):
 # 内嵌包: 打包进内核的 .zip (base64), 供内核终端 install <包名> 使用
 FROZEN_PKGS = {
     'hello': ('示例包: 演示 install / run 的安装与运行流程',
-            'UEsDBBQAAAAIAJplJV0jMmONEQIAAPgCAAAKAAAAUkVBRE1FLlRYVGVST08aQRS/k/AdXjxBInI3rYceeu3BY9M0a7sV4rK7YdcmesJGuosshUS0BTFgkGKwAYxRtrsCH6Y7M7vfom+Y1hI7ySSTl/m99/vzMrKiaMAuvWBWJk4xHnu+dOKxeCycN+i3UdSswgvZNOU84M1lVUmBhG4C6/v0ssJKdhICtxDeTcjnIrlzwvkZPmjHZc1D+lDH9th7FVj9ip73ooETjg7isRVaOsYypDYg7HfJlzJ/kWEp7IravBZeOCt8/vlFdDwLJ6NfhU+cEm9zewIJ0rqCl5uvNuHPLN9m16PIcpLr/Bfg2TLh6eHUir2nYsR3fWcblKyxDCL2V2J5pDrCoZxsQgjEJ+1Y4XAcuB68FrU3SdElqxqmpCiQWVgrhqI+p0jsMT21Av+eOB75ec8aPjYQGMX4jyht91irzJGWh65xJxdgAcjvqssDFoBSHw1DcaTahZyUVdf0vX+68nJO+yg/YkjFDadT7hOX0voRetdkfINJY4yBO6CNYVRowtp+Vl/nsbFbn/nt0BoQ9zsyAawDmfRIcUKPjgLfp4dVdjYk0xOR6Wo8Rusz1AuSrhtp3Uzr0rsdaVs20s+4EbXKRhoXpryK0VVE0H8j0/fMjKaCqWmKkd7aVd8r8lvdRCmQSn3Ia/uyuiA9vgkempFVoadjVm9Tu/aYCzpL7AnWxVbgPiBhsRvUq7HOwWKLfgNQSwMEFAAAAAgAmmUlXXkKEofRAAAABAEAAAcAAABtYWluLnB5U1bISM3JyVfQVXg5q1+hoETh+e6O56vXP21rfbq15/msludLdj3Z1/20p5WXS1nh+ZSNCpl5xSWJOTlQbS+WLwbKPW2b+bR16bNp7U92b3vas+vphD4doNoVCkWleVB1zzqXv1jY82zOGoiixw1NvFwFRZl5JRrqEAVpRfm5Col5MONTUxQKEpOzE9NTFdU14UoNFbQVDBVs1XUUwCygBAimpKYppBelppZolGfka1rxcikAAVTHk70Lni7dq6OgDlQPkoXogKhWdwv2DwaZDgBQSwECFAAUAAAACACaZSVdIzJjjRECAAD4AgAACgAAAAAAAAAAAAAAtoEAAAAAUkVBRE1FLlRYVFBLAQIUABQAAAAIAJplJV15ChKH0QAAAAQBAAAHAAAAAAAAAAAAAAC2gTkCAABtYWluLnB5UEsFBgAAAAACAAIAbQAAAC8DAAAAAA=='),
+            'UEsDBBQAAAAIACB3L10jMmONEQIAAPgCAAAKAAAAUkVBRE1FLlRYVGVST08aQRS/k/AdXjxBInI3rYceeu3BY9M0a7sV4rK7YdcmesJGuosshUS0BTFgkGKwAYxRtrsCH6Y7M7vfom+Y1hI7ySSTl/m99/vzMrKiaMAuvWBWJk4xHnu+dOKxeCycN+i3UdSswgvZNOU84M1lVUmBhG4C6/v0ssJKdhICtxDeTcjnIrlzwvkZPmjHZc1D+lDH9th7FVj9ip73ooETjg7isRVaOsYypDYg7HfJlzJ/kWEp7IravBZeOCt8/vlFdDwLJ6NfhU+cEm9zewIJ0rqCl5uvNuHPLN9m16PIcpLr/Bfg2TLh6eHUir2nYsR3fWcblKyxDCL2V2J5pDrCoZxsQgjEJ+1Y4XAcuB68FrU3SdElqxqmpCiQWVgrhqI+p0jsMT21Av+eOB75ec8aPjYQGMX4jyht91irzJGWh65xJxdgAcjvqssDFoBSHw1DcaTahZyUVdf0vX+68nJO+yg/YkjFDadT7hOX0voRetdkfINJY4yBO6CNYVRowtp+Vl/nsbFbn/nt0BoQ9zsyAawDmfRIcUKPjgLfp4dVdjYk0xOR6Wo8Rusz1AuSrhtp3Uzr0rsdaVs20s+4EbXKRhoXpryK0VVE0H8j0/fMjKaCqWmKkd7aVd8r8lvdRCmQSn3Ia/uyuiA9vgkempFVoadjVm9Tu/aYCzpL7AnWxVbgPiBhsRvUq7HOwWKLfgNQSwMEFAAAAAgAIHcvXXkKEofRAAAABAEAAAcAAABtYWluLnB5U1bISM3JyVfQVXg5q1+hoETh+e6O56vXP21rfbq15/msludLdj3Z1/20p5WXS1nh+ZSNCpl5xSWJOTlQbS+WLwbKPW2b+bR16bNp7U92b3vas+vphD4doNoVCkWleVB1zzqXv1jY82zOGoiixw1NvFwFRZl5JRrqEAVpRfm5Col5MONTUxQKEpOzE9NTFdU14UoNFbQVDBVs1XUUwCygBAimpKYppBelppZolGfka1rxcikAAVTHk70Lni7dq6OgDlQPkoXogKhWdwv2DwaZDgBQSwECFAAUAAAACAAgdy9dIzJjjRECAAD4AgAACgAAAAAAAAAAAAAAtoEAAAAAUkVBRE1FLlRYVFBLAQIUABQAAAAIACB3L115ChKH0QAAAAQBAAAHAAAAAAAAAAAAAAC2gTkCAABtYWluLnB5UEsFBgAAAAACAAIAbQAAAC8DAAAAAA=='),
 }
 
 # ====================================================================
@@ -625,7 +625,7 @@ FROZEN_PKGS = {
 #      便于宿主机侧或后续从外部导入的包。
 #
 # 索引 INDEX.TXT: 每行 "包名|入口文件|文件1,文件2,...", 记录"已安装"。
-#   内核的 krn 没有列目录接口, 这个索引同时充当 pt 侧的文件清单。
+#   Better Terminal 通过 krn.list_files() 获取真实文件区清单；INDEX.TXT 只负责记录包元数据。
 #
 # 内核限制 (来自 krn_bridge.c 的文件区): 单文件 4KB、最多 16 个文件、
 #   文件名 24 字符、内容以首个 NUL 结尾 (因此只能存文本)。
@@ -743,6 +743,18 @@ def store_package(fs, base, raw):
         raise ValueError('包过大, 分块数超过 99')
     for idx in range(len(chunks)):
         fs.write(chunk_name(base, idx), chunks[idx])
+    # 覆盖较小的新包时，删除旧包遗留的高编号分块；否则 load_chunks()
+    # 会把旧尾巴也拼进去，导致解码失败或加载到错误内容。
+    idx = len(chunks)
+    while idx < 100:
+        old_name = chunk_name(base, idx)
+        try:
+            if not fs.exists(old_name):
+                break
+            fs.delete(old_name)
+        except Exception:
+            break
+        idx += 1
     return len(chunks)
 
 
@@ -874,16 +886,11 @@ def list_packages(fs):
 # ============================================================
 # fs_kernel.py - FSOS 内核文件区实现 (基于 krn 模块)
 #
-# 内核没有目录树, krn 只提供扁平文件区:
-#   krn.read_file(name)        -> str   (以首个 NUL 截断, 故只能存文本)
-#   krn.write_file(name, text) -> str   (单文件上限 4KB, 最多 16 个文件)
-#   krn 没有"列目录"与"删除文件"接口, 因此:
-#     - names() 读 pt 自己维护的 INDEX.TXT 索引;
-#     - delete() 把内容清空并从索引移除 (目录项保留但内容为空)。
-#
-# 这是刻意的取舍: 不改内核 C 代码 (krn_bridge.c) 就能支持安装,
-# 代价是"已删除"的文件仍占用一个目录槽位。
+# 内核文件区由 C 侧 filesys.c 提供真实目录。Better Terminal 直接通过
+# krn.list_files()/del_file() 访问它，从而与 C 文件管理器、编辑器共享同一批文件。
+# 当前 FSOS 文件区是扁平命名空间；单文件上限由 krn_bridge/文件系统统一决定。
 # ============================================================
+
 import krn
 
 
@@ -921,23 +928,22 @@ class KrnFS(object):
         return krn.write_file(name, text)
 
     def delete(self, name):
-        try:
-            krn.write_file(name, '')
-        except Exception:
-            pass
-        return '已清空: ' + name
+        result = krn.del_file(name)
+        if isinstance(result, str) and result.startswith('ERROR'):
+            raise OSError(result)
+        return result
 
     def names(self):
-        """列出 pt 已安装的文件 (来自 INDEX.TXT)"""
+        """列出内核文件区真实存在的文件。
+
+        旧实现只读取 INDEX.TXT，导致 C 文件管理器/编辑器创建的文件在
+        Better Terminal 里不可见。krn 已经提供 list_files()，这里直接复用
+        内核目录作为唯一事实来源。
+        """
         try:
-            text = krn.read_file(INDEX_NAME)
+            return list(krn.list_files())
         except Exception:
             return []
-        out = []
-        for rec in parse_index(text):
-            for f in rec['files']:
-                out.append(f)
-        return out
 
 # ====================================================================
 # from kernel/backend_kernel.py
@@ -1097,7 +1103,10 @@ HELP_LINES = [
     'unzip <包名>                 把包解压到文件区 (不登记索引)',
     'unzip -l <包名>              列出包内文件',
     'install <包名>               解压并登记为已安装应用',
-    'run <包名>                   运行已安装应用的入口文件',
+    'run <包名|文件>              运行应用、脚本或可执行文件',
+    'run <.py>                    直接运行 Python 脚本',
+    'run <.sh>                    按 FSOS Shell 命令逐行执行脚本',
+    'run <.elf>                   运行 x86-64 Linux PIE ELF',
 ]
 
 
@@ -1632,22 +1641,112 @@ class SYSTEM_OS(object):
         return ('未知子命令: ' + sub +
                 '\n可用: list | remove <包名> | export <包名>')
 
+    def _run_shell_script(self, source, filename):
+        # FSOS .sh 不是 GNU bash；它是一种轻量、可移植的“命令脚本”格式。
+        # 每个有效行交给同一套 run_cmd_text()，因此脚本与交互终端使用完全相同的命令实现。
+        outputs = []
+        lines = source.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        stopped = False
+        for lineno, raw in enumerate(lines, 1):
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line in ('set -e', 'set +e', 'set -u', 'set +u', 'set -eu', 'set -ue'):
+                continue
+            if line.lower() in ('@echo off', 'echo off'):
+                continue
+            # 去掉 shebang 已由 # 注释规则处理；支持简单的行尾注释。
+            if ' #' in line:
+                line = line.split(' #', 1)[0].rstrip()
+            if not line:
+                continue
+            out = run_cmd_text(line)
+            if out:
+                outputs.append('[%s:%d] %s' % (filename, lineno, out))
+            low = (out or '').lower()
+            if low.startswith('错误') or low.startswith('运行失败') or low.startswith('未知命令'):
+                stopped = True
+                outputs.append('脚本已停止: 第 %d 行执行失败' % lineno)
+                break
+        if stopped:
+            return '\n'.join(outputs)
+        return '\n'.join(outputs)
+
+    def _run_direct_file(self, name):
+        # 文件名在 FSOS 内核文件区是扁平命名空间；宿主机允许相对路径。
+        if name.startswith('./'):
+            name = name[2:]
+        if not self.fs.exists(name):
+            return '文件不存在: ' + name
+
+        lower = name.lower()
+        # Linux PIE ELF：交给内核 Linuxulator；仅内核环境支持。
+        if lower.endswith('.elf'):
+            if config.krn is None:
+                return '当前环境不支持直接运行 ELF: ' + name
+            try:
+                config.krn.run('run ' + name)
+                return 'ELF 启动请求已提交: ' + name
+            except Exception as e:
+                return 'ELF 启动失败: ' + str(e)
+
+        try:
+            src = self.fs.read(name)
+        except Exception as e:
+            return '读取失败: ' + str(e)
+
+        # 直接运行脚本时，允许 shebang 覆盖扩展名。
+        first = src.split('\n', 1)[0].strip().lower() if src else ''
+        is_shell = lower.endswith(('.sh', '.bash', '.command', '.cmd', '.bat')) or first.startswith('#!') and ('sh' in first or 'shell' in first)
+        if is_shell:
+            return self._run_shell_script(src, name)
+
+        ns = {'__name__': '__main__', '__file__': name}
+        if config.krn is not None:
+            ns['krn'] = config.krn
+        if lower.endswith('.py'):
+            try:
+                exec(src, ns)
+            except SystemExit:
+                return ''
+            except Exception as e:
+                return 'Python 运行失败 [%s]: %s' % (name, str(e))
+            return 'Python 脚本执行完成: ' + name
+
+        # C/Java 源文件由内核已有语言模块执行；这里必须通过 krn.run 进入统一的 C 端
+        # 语言调度，而不是把源代码交给 Python exec。
+        if lower.endswith(('.c', '.cc', '.cpp', '.cxx')) or lower.endswith('.java'):
+            if config.krn is None:
+                return '当前宿主机模式不能直接运行 FSOS C/Java 模块: ' + name
+            try:
+                config.krn.run('run ' + name)
+                return ''
+            except Exception as e:
+                return '程序启动失败: ' + str(e)
+
+        return '无法识别的可执行类型: ' + name + ' (支持 .py/.sh/.bash/.cmd/.bat/.elf/.c/.cpp/.java)'
+
     def run(self, args):
         parts = (args or '').split()
         if not parts:
-            return '用法: run <包名>'
+            return '用法: run <包名|文件>'
         name = parts[0]
+
+        # 兼容原有包管理语义：run hello 仍然优先运行已安装的 hello 入口。
         src = app_source(self.fs, name)
-        if src is None:
-            return '应用未安装或没有入口: ' + name
-        ns = {}
-        if config.krn is not None:
-            ns['krn'] = config.krn
-        try:
-            exec(src, ns)
-        except Exception as e:
-            return '运行失败: ' + str(e)
-        return ''
+        if src is not None:
+            ns = {'__name__': '__main__', '__file__': name}
+            if config.krn is not None:
+                ns['krn'] = config.krn
+            try:
+                exec(src, ns)
+            except SystemExit:
+                return ''
+            except Exception as e:
+                return '应用运行失败 [%s]: %s' % (name, str(e))
+            return '应用执行完成: ' + name
+
+        return self._run_direct_file(name)
 
 # ====================================================================
 # from core/commands.py
@@ -1683,7 +1782,7 @@ _USAGE = {
     'auto-output': '用法: auto-output <1(文件内容) 或 2(手动输入)>',
     'unzip': '用法: unzip <包名> 或 unzip -l <包名>',
     'install': '用法: install <包名>',
-    'run': '用法: run <包名>',
+    'run': '用法: run <包名|文件>  (支持 .py/.sh/.bash/.cmd/.bat/.elf/.c/.cpp/.java)',
     'theme': '用法: theme <dark|light>',
 }
 
@@ -1870,12 +1969,20 @@ _bt_prev_left = False
 
 def _bt_append(text):
     for ln in (text or '').split('\n'):
+        if not ln:
+            _bt_lines.append('')
+            continue
+        # 高分辨率终端按当前列宽换行，避免输出被屏幕裁切。
+        while len(ln) > _BT_COLS:
+            _bt_lines.append(ln[:_BT_COLS])
+            ln = ln[_BT_COLS:]
         _bt_lines.append(ln)
     if len(_bt_lines) > 1000:
         del _bt_lines[:-1000]
 
 
 def _bt_draw():
+    _bt_refresh_geometry()
     krn.term_clear()
     start = len(_bt_lines) - (_BT_ROWS - 1)
     if start < 0:
@@ -1901,6 +2008,7 @@ def _bt_draw():
 
 def _bt_input():
     global _bt_inrow, _bt_inbuf, _bt_prev_left
+    _bt_refresh_geometry()
     _bt_inbuf = ''
     _bt_inrow = _BT_ROWS - 1
     _bt_draw()
@@ -1939,6 +2047,7 @@ def _bt_input():
 def run():
     global _bt_lines, _bt_inrow, _bt_inbuf
     setup()
+    _bt_refresh_geometry()
     _bt_lines = []
     _bt_append(BANNER)
     while True:
@@ -2001,7 +2110,7 @@ HELP_LINES = [
     'unzip <pkg>                extract to filestore',
     'unzip -l <pkg>             list files in a package',
     'install <pkg>              extract and register',
-    'run <pkg>                  run entry file of a package',
+    'run <pkg|file>             run app/script/executable (.py/.sh/.elf/... )',
     '---- system ----',
     'whoami                     current user and role',
     'drivers                    list registered kernel drivers',

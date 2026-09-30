@@ -1,0 +1,24 @@
+Kernel/display/input:
+  kernel/drivers/vga.c
+  kernel/drivers/mouse.c
+
+GUI/text/window:
+  user/cjk.c
+  user/window.c
+  user/wm.c
+  user/compositor.c (preserved architecture; WM remains single render path)
+
+Development/runtime:
+  user/devstudio.c
+  user/devstudio.h
+  user/module.c
+  user/mod_abi.h
+  modules/cint_mod.c
+  modules/jvm_mod.c
+  micropython/ports/fsos/mp_entry.c
+
+Session/app routing:
+  user/app.c
+
+Regression tests:
+  tools/tests/test_ui_regression_v23.py

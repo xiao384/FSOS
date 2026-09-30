@@ -20,6 +20,7 @@
 #include "mouse.h"      // mouse_get(): 鼠标状态 (krn.mouse)
 #include "idt.h"        // get_ticks(): 毫秒计时 (krn.delay)
 #include "filesys.h"    // 内核文件区 (与桌面"开发"应用共用同一份磁盘文件)
+#include "power.h"      // 统一 ACPI 电源/复位服务
 
 // ============================================================
 // 文件层: 原先是本文件内的 static 实现, 已提到 kernel/core/filesys.c
@@ -113,18 +114,17 @@ STATIC mp_obj_t krn_user_setrole(mp_obj_t name_in, mp_obj_t role_in) {
 STATIC MP_DEFINE_CONST_FUN_OBJ_2(krn_user_setrole_obj, krn_user_setrole);
 
 STATIC mp_obj_t krn_reboot(void) {
-    // 8042 键盘控制器复位
+    // 统一走 ACPI RESET_REG，失败后由更高层选择 8042 fallback。
+    (void)reboot_system();
     outb(0x64, 0xFE);
-    for (;;) __asm__ volatile("cli; hlt");
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(krn_reboot_obj, krn_reboot);
 
 STATIC mp_obj_t krn_poweroff(void) {
-    outw(0x604, 0x2000);    // QEMU ACPI (ICH9)
-    outw(0xB004, 0x2000);   // BOCHS / QEMU debug exit
-    outw(0x4004, 0x3400);   // QEMU ACPI (PIIX4)
-    for (;;) __asm__ volatile("cli; hlt");
+    // 与桌面/终端统一的 ACPI FADT + DSDT _S5_ 服务。
+    // 失败时仅返回异常码给上层，不再把“CPU 停止”伪装成“系统关机”。
+    (void)poweroff_system();
     return mp_const_none;
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(krn_poweroff_obj, krn_poweroff);
@@ -339,6 +339,15 @@ STATIC mp_obj_t krn_mouse(void) {
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(krn_mouse_obj, krn_mouse);
 
+// screen_size() -> (width, height), 返回当前 GOP/LFB 的真实像素尺寸。
+STATIC mp_obj_t krn_screen_size(void) {
+    mp_obj_t row[2];
+    row[0] = mp_obj_new_int(VGA_W);
+    row[1] = mp_obj_new_int(SCREEN_H);
+    return mp_obj_new_tuple(2, row);
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_0(krn_screen_size_obj, krn_screen_size);
+
 // delay(ms) -> 忙等若干毫秒 (避免空转)
 STATIC mp_obj_t krn_delay(mp_obj_t ms_in) {
     uint32_t ms = (uint32_t)mp_obj_get_int(ms_in);
@@ -381,6 +390,7 @@ STATIC const mp_rom_map_elem_t krn_module_globals_table[] = {
     { MP_ROM_QSTR(MP_QSTR_term_fill),  MP_ROM_PTR(&krn_term_fill_obj) },
     { MP_ROM_QSTR(MP_QSTR_kb_poll),    MP_ROM_PTR(&krn_kb_poll_obj) },
     { MP_ROM_QSTR(MP_QSTR_mouse),      MP_ROM_PTR(&krn_mouse_obj) },
+    { MP_ROM_QSTR(MP_QSTR_screen_size),MP_ROM_PTR(&krn_screen_size_obj) },
     { MP_ROM_QSTR(MP_QSTR_delay),      MP_ROM_PTR(&krn_delay_obj) },
 };
 STATIC MP_DEFINE_CONST_DICT(krn_module_globals, krn_module_globals_table);

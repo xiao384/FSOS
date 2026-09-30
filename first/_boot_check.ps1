@@ -1,10 +1,39 @@
-$ok=0;$fail=0
-for ($i=1; $i -le 4; $i++) {
-    $out = & "C:/Users/Administrator/AppData/Local/Programs/Python/Python314/python.exe" check-iso.py 2>&1 | Out-String
-    if ($out -match 'RIP=0x([0-9a-f]+)') {
-        $rip = [Convert]::ToUInt64($Matches[1], 16)
-        if ($rip -ge 0x100000 -and $rip -lt 0x459800) { $ok++; Write-Host ("run {0}: RIP=0x{1:X} IN-KERNEL(ok)" -f $i,$rip) }
-        else { $fail++; Write-Host ("run {0}: RIP=0x{1:X} OUT-OF-RANGE(FAIL)" -f $i,$rip) }
-    } else { Write-Host ("run {0}: NO RIP OUTPUT" -f $i) }
+﻿# ============================================================
+# _boot_check.ps1 - 启动验证 (薄转发壳, 转发到 fsos.py verify)
+#
+# 原实现: 直接调用 check-iso.py 并匹配 RIP 寄存器值判断是否在内核代码段。
+# 现实现: 转发到 fsos.py verify, 经 FSOS_BOOT_OK 哨兵断言判定启动成功。
+#
+# 用法: .\_boot_check.ps1 [-Timeout <seconds>]
+# ============================================================
+param(
+    [int]$Timeout = 25
+)
+
+$ErrorActionPreference = "Stop"
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$FsosPy = Join-Path $ScriptDir "tools\fsos.py"
+
+# 定位 Python: 优先 PATH, 回退到已知安装位置
+$py = Get-Command python -ErrorAction SilentlyContinue
+if (-not $py) {
+    $pyCands = @(
+        "C:\Users\Administrator\AppData\Local\Programs\Python\Python314\python.exe",
+        "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\python.exe",
+        "C:\Users\Administrator\AppData\Local\Programs\Python\Python312\python.exe",
+        "python3.exe",
+        "python.exe"
+    )
+    foreach ($c in $pyCands) {
+        $hit = Get-Command $c -ErrorAction SilentlyContinue
+        if ($hit) { $py = $hit; break }
+    }
 }
-Write-Host ("==== OK={0} FAIL={1} ====" -f $ok,$fail)
+if (-not $py) {
+    Write-Host "[!] Python not found. Install Python 3.12+ or add to PATH." -ForegroundColor Red
+    exit 4
+}
+
+Write-Host "[boot_check] Forwarding to fsos.py verify (FSOS_BOOT_OK sentinel)..." -ForegroundColor Cyan
+& $py.Source $FsosPy verify --timeout $Timeout --no-gdb
+exit $LASTEXITCODE

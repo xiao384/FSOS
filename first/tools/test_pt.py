@@ -165,12 +165,66 @@ class FakeKrn(object):
         self.files[name] = str(text)[:4096]
         return 'file written'
 
+    def list_files(self):
+        return list(self.files.keys())
+
+    def del_file(self, name):
+        if name not in self.files:
+            return 'ERROR: no such file'
+        del self.files[name]
+        return 'file deleted'
+
+    def exec_elf(self, name):
+        if name not in self.files:
+            return -2
+        self.last_elf = name
+        return 7
+
+    def run(self, line):
+        self.last_run = line
+        return None
+
+    # ---- 内核终端绘制/输入桩 (供 section 8 端到端使用) ----
+    # 当前 bt.py 内核终端走 krn.kb_poll() 逐键输入 (非 builtins.input), 并把
+    # 返回页/输出经 _bt_append 累积到模块级 _bt_lines, 再用 krn.term_text 画屏。
+    # 端到端: 用 set_script 把命令脚本转成键码流由 kb_poll 驱动; 断言文本直接从
+    # exec 后的 _bt_lines (全量滚动历史) + stdout (run 包体 print) 取, 不依赖屏幕桩。
+    def term_clear(self):
+        pass
+
+    def term_text(self, x, y, s, c):
+        pass
+
+    def term_fill(self, x0, y0, x1, y1, c):
+        pass
+
+    def mouse(self):
+        return (0, 0, 0)
+
+    def delay(self, ms):
+        pass
+
+    def set_script(self, lines):
+        self._keys = []
+        for ln in lines:
+            self._keys += [ord(c) for c in ln] + [13]   # 每行: 字符键码 + 回车
+        self._ki = 0
+
+    def kb_poll(self):
+        ks = getattr(self, '_keys', None)
+        if ks and self._ki < len(ks):
+            k = ks[self._ki]
+            self._ki += 1
+            return k
+        return 0
+
 
 fake = FakeKrn()
 sys.modules['krn'] = fake
 
 from kernel.fs_kernel import KrnFS  # noqa: E402
 import pkg.ptpkg as ptpkg  # noqa: E402
+from core.config import config  # noqa: E402
 
 fs = KrnFS()
 check('初始无已安装包', ptpkg.list_packages(fs).startswith('  [内嵌]'))
@@ -182,8 +236,12 @@ msg = ptpkg.install_zip(fs, 'hello', raw)
 check('install 成功', msg.startswith('已安装 hello'), msg)
 
 names = fs.names()
-check('索引记录了两个文件',
+check('内核 ls 能看到真实文件区',
       'main.py' in names and 'README.TXT' in names, str(names))
+
+# 模拟 C 文件管理器额外创建一个不在 INDEX.TXT 的文件，终端也必须看得到。
+fs.write('manual.py', 'print(42)')
+check('非包文件也能被终端发现', 'manual.py' in fs.names(), str(fs.names()))
 
 src = ptpkg.app_source(fs, 'hello')
 check('入口源码可读', src is not None and 'hello from an installed' in src)
@@ -194,7 +252,8 @@ check('pkg list 同时显示内嵌与已装',
 
 msg = ptpkg.uninstall(fs, 'hello')
 check('uninstall 成功', msg.startswith('已卸载'), msg)
-check('卸载后索引为空', fs.names() == [])
+check('卸载后包文件被真正删除', 'main.py' not in fs.names() and 'README.TXT' not in fs.names())
+check('非包文件不受卸载影响', 'manual.py' in fs.names())
 
 # 超过 4KB 的文件必须被拒绝, 而不是被静默截断
 big = io.BytesIO()
@@ -202,6 +261,28 @@ with zipfile.ZipFile(big, 'w', zipfile.ZIP_DEFLATED) as zf:
     zf.writestr('big.txt', 'x' * 9000)
 msg = ptpkg.install_zip(fs, 'big', big.getvalue())
 check('超 4KB 的文件被拒绝', msg.startswith('安装失败'), msg)
+
+# package 分块覆盖回归：新包更小时必须清掉旧高位分块。
+ptpkg.store_package(fs, 'chunkcase', b'A' * 7000)
+old_tail = fs.read('chunkcase.P2') if fs.exists('chunkcase.P2') else ''
+check('分块测试创建旧尾块', old_tail != '')
+ptpkg.store_package(fs, 'chunkcase', b'B')
+check('小包覆盖会删除旧尾块', not fs.exists('chunkcase.P2'))
+check('小包覆盖后可正确读取', ptpkg.get_package_bytes(fs, 'chunkcase') == b'B')
+
+# run 扩展：直接运行脚本/ELF，而不仅是已安装包。
+fs.write('hello.py', 'print("direct python")\n')
+fs.write('build.sh', '#!/bin/sh\necho step1\necho step2\n')
+fs.write('HELLO.ELF', 'not-text-placeholder')
+from core.ptos import SYSTEM_OS  # noqa: E402
+config.krn = fake
+config.root = SYSTEM_OS('pxs', 'root', 'root', fs)
+out_py = config.root.run('hello.py')
+check('run 可直接执行 .py', out_py == 'Python 脚本执行完成: hello.py', repr(out_py))
+out_sh = config.root.run('build.sh')
+check('run 可逐行执行 .sh', '[build.sh:2] step1' in out_sh and '[build.sh:3] step2' in out_sh, repr(out_sh))
+out_elf = config.root.run('HELLO.ELF')
+check('run 可启动 .elf', out_elf == 'ELF 启动请求已提交: HELLO.ELF' and getattr(fake, 'last_run', '') == 'run HELLO.ELF', repr(out_elf))
 
 
 # ============================================================
@@ -251,7 +332,25 @@ except ImportError:
 
 
 # ============================================================
-section('8. 端到端: 运行拼合后的 pyroot/bt.py')
+section('8. MicroPython FSOS 端口静态检查')
+MPCONFIG = os.path.join(FIRST_DIR, 'micropython', 'ports', 'fsos', 'mpconfigport.h')
+MPENTRY = os.path.join(FIRST_DIR, 'micropython', 'ports', 'fsos', 'mp_entry.c')
+try:
+    cfg = open(MPCONFIG, 'r', encoding='utf-8').read()
+    ent = open(MPENTRY, 'r', encoding='utf-8').read()
+    check('FSOS 开启外部 Python import', '#define MICROPY_ENABLE_EXTERNAL_IMPORT (1)' in cfg)
+    check('端口实现文件存在性探测', 'mp_import_stat_t mp_import_stat' in ent and 'fs_size(path)' in ent)
+    check('端口实现 Python 文件读取', 'mp_lexer_new_from_file' in ent and 'fs_read(path, buf' in ent)
+    check('Better Terminal 编译对象注册为 GC root',
+          'static mp_obj_t g_bt_fun' in ent and 'gc_collect_root(&g_bt_fun, 1)' in ent)
+    check('MicroPython 初始化有异常保护',
+          'mp_fsos_run(int mode)' in ent and 'nlr_push(&nlr)' in ent)
+except Exception as e:
+    check('MicroPython 端口静态检查', False, str(e))
+
+
+# ============================================================
+section('9. 端到端: 运行拼合后的 pyroot/bt.py')
 import builtins  # noqa: E402
 
 if not os.path.isfile(BUNDLE):
@@ -261,9 +360,7 @@ else:
         bundle_src = f.read()
 
     fake2 = FakeKrn()
-    sys.modules['krn'] = fake2
-
-    script = [
+    fake2.set_script([
         'help',
         'message',
         'users list',
@@ -275,31 +372,37 @@ else:
         'pkg remove hello',
         'ls',
         'exit',
-    ]
-    it = iter(script)
+    ])
+    sys.modules['krn'] = fake2
 
-    def fake_input(prompt=''):
-        try:
-            return next(it)
-        except StopIteration:
-            raise EOFError
-
+    # 内核终端输入走 krn.kb_poll() (见 bt.py), 由 set_script 驱动;
+    # 保留 builtins.input 安全桩, 防止万一触发的确认对话框卡在真实 stdin。
     out = io.StringIO()
-    old_input, old_stdout = builtins.input, sys.stdout
-    builtins.input = fake_input
+    old_stdout = sys.stdout
+    old_input = getattr(builtins, 'input', None)
+
+    def _safe_input(prompt=''):
+        return 'y'
+
+    builtins.input = _safe_input
     sys.stdout = out
+    ns = {'__name__': '__main__'}
     try:
-        exec(compile(bundle_src, BUNDLE, 'exec'), {'__name__': '__main__'})
+        exec(compile(bundle_src, BUNDLE, 'exec'), ns)
     except Exception as e:
         import traceback
         sys.stdout = old_stdout
         traceback.print_exc()
         check('端到端运行', False, str(e))
+    else:
+        check('端到端运行', True)
     finally:
         sys.stdout = old_stdout
-        builtins.input = old_input
-
-    text = out.getvalue()
+        if old_input is not None:
+            builtins.input = old_input
+    # 全量滚动历史 (_bt_lines) + run 包体 print (stdout) 合并为可断言文本
+    bt_lines = ns.get('_bt_lines', [])
+    text = '\n'.join(bt_lines) + '\n' + out.getvalue()
     # 内核版 help 被 kernel/help_ascii.py 覆盖为 ASCII
     check('help 输出包管理命令 (ASCII 内核版)', 'install <pkg>' in text)
     check('横幅与帮助为纯 ASCII (内核屏可显示)',

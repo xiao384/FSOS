@@ -1,16 +1,11 @@
 # ============================================================
 # fs_kernel.py - FSOS 内核文件区实现 (基于 krn 模块)
 #
-# 内核没有目录树, krn 只提供扁平文件区:
-#   krn.read_file(name)        -> str   (以首个 NUL 截断, 故只能存文本)
-#   krn.write_file(name, text) -> str   (单文件上限 4KB, 最多 16 个文件)
-#   krn 没有"列目录"与"删除文件"接口, 因此:
-#     - names() 读 pt 自己维护的 INDEX.TXT 索引;
-#     - delete() 把内容清空并从索引移除 (目录项保留但内容为空)。
-#
-# 这是刻意的取舍: 不改内核 C 代码 (krn_bridge.c) 就能支持安装,
-# 代价是"已删除"的文件仍占用一个目录槽位。
+# 内核文件区由 C 侧 filesys.c 提供真实目录。Better Terminal 直接通过
+# krn.list_files()/del_file() 访问它，从而与 C 文件管理器、编辑器共享同一批文件。
+# 当前 FSOS 文件区是扁平命名空间；单文件上限由 krn_bridge/文件系统统一决定。
 # ============================================================
+
 import krn
 from pkg.ptpkg import parse_index, INDEX_NAME
 
@@ -49,20 +44,19 @@ class KrnFS(object):
         return krn.write_file(name, text)
 
     def delete(self, name):
-        try:
-            krn.write_file(name, '')
-        except Exception:
-            pass
-        return '已清空: ' + name
+        result = krn.del_file(name)
+        if isinstance(result, str) and result.startswith('ERROR'):
+            raise OSError(result)
+        return result
 
     def names(self):
-        """列出 pt 已安装的文件 (来自 INDEX.TXT)"""
+        """列出内核文件区真实存在的文件。
+
+        旧实现只读取 INDEX.TXT，导致 C 文件管理器/编辑器创建的文件在
+        Better Terminal 里不可见。krn 已经提供 list_files()，这里直接复用
+        内核目录作为唯一事实来源。
+        """
         try:
-            text = krn.read_file(INDEX_NAME)
+            return list(krn.list_files())
         except Exception:
             return []
-        out = []
-        for rec in parse_index(text):
-            for f in rec['files']:
-                out.append(f)
-        return out

@@ -89,7 +89,10 @@ pkg list                                列出内嵌包与已安装包
 pkg remove <包名>                       卸载
 install <包名>                          解压并登记为已安装应用
 unzip <包名>        unzip -l <包名>     解压到文件区 / 仅列出内容
-run <包名>                              执行已安装应用的入口文件
+run <包名|文件>                         运行已安装应用、脚本或程序
+run demo.py                            直接运行 Python 脚本
+run build.sh                           逐行执行 FSOS Shell 脚本
+run HELLO.ELF                          启动 Linux PIE ELF
 ```
 
 > **配色切换**：`theme dark` / `theme light` 在内核版（ASCII 终端）仅记录偏好并提示，

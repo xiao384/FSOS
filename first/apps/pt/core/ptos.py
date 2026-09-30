@@ -77,7 +77,10 @@ HELP_LINES = [
     'unzip <包名>                 把包解压到文件区 (不登记索引)',
     'unzip -l <包名>              列出包内文件',
     'install <包名>               解压并登记为已安装应用',
-    'run <包名>                   运行已安装应用的入口文件',
+    'run <包名|文件>              运行应用、脚本或可执行文件',
+    'run <.py>                    直接运行 Python 脚本',
+    'run <.sh>                    按 FSOS Shell 命令逐行执行脚本',
+    'run <.elf>                   运行 x86-64 Linux PIE ELF',
 ]
 
 
@@ -612,19 +615,109 @@ class SYSTEM_OS(object):
         return ('未知子命令: ' + sub +
                 '\n可用: list | remove <包名> | export <包名>')
 
+    def _run_shell_script(self, source, filename):
+        # FSOS .sh 不是 GNU bash；它是一种轻量、可移植的“命令脚本”格式。
+        # 每个有效行交给同一套 run_cmd_text()，因此脚本与交互终端使用完全相同的命令实现。
+        outputs = []
+        lines = source.replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        stopped = False
+        for lineno, raw in enumerate(lines, 1):
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line in ('set -e', 'set +e', 'set -u', 'set +u', 'set -eu', 'set -ue'):
+                continue
+            if line.lower() in ('@echo off', 'echo off'):
+                continue
+            # 去掉 shebang 已由 # 注释规则处理；支持简单的行尾注释。
+            if ' #' in line:
+                line = line.split(' #', 1)[0].rstrip()
+            if not line:
+                continue
+            out = run_cmd_text(line)
+            if out:
+                outputs.append('[%s:%d] %s' % (filename, lineno, out))
+            low = (out or '').lower()
+            if low.startswith('错误') or low.startswith('运行失败') or low.startswith('未知命令'):
+                stopped = True
+                outputs.append('脚本已停止: 第 %d 行执行失败' % lineno)
+                break
+        if stopped:
+            return '\n'.join(outputs)
+        return '\n'.join(outputs)
+
+    def _run_direct_file(self, name):
+        # 文件名在 FSOS 内核文件区是扁平命名空间；宿主机允许相对路径。
+        if name.startswith('./'):
+            name = name[2:]
+        if not self.fs.exists(name):
+            return '文件不存在: ' + name
+
+        lower = name.lower()
+        # Linux PIE ELF：交给内核 Linuxulator；仅内核环境支持。
+        if lower.endswith('.elf'):
+            if config.krn is None:
+                return '当前环境不支持直接运行 ELF: ' + name
+            try:
+                config.krn.run('run ' + name)
+                return 'ELF 启动请求已提交: ' + name
+            except Exception as e:
+                return 'ELF 启动失败: ' + str(e)
+
+        try:
+            src = self.fs.read(name)
+        except Exception as e:
+            return '读取失败: ' + str(e)
+
+        # 直接运行脚本时，允许 shebang 覆盖扩展名。
+        first = src.split('\n', 1)[0].strip().lower() if src else ''
+        is_shell = lower.endswith(('.sh', '.bash', '.command', '.cmd', '.bat')) or first.startswith('#!') and ('sh' in first or 'shell' in first)
+        if is_shell:
+            return self._run_shell_script(src, name)
+
+        ns = {'__name__': '__main__', '__file__': name}
+        if config.krn is not None:
+            ns['krn'] = config.krn
+        if lower.endswith('.py'):
+            try:
+                exec(src, ns)
+            except SystemExit:
+                return ''
+            except Exception as e:
+                return 'Python 运行失败 [%s]: %s' % (name, str(e))
+            return 'Python 脚本执行完成: ' + name
+
+        # C/Java 源文件由内核已有语言模块执行；这里必须通过 krn.run 进入统一的 C 端
+        # 语言调度，而不是把源代码交给 Python exec。
+        if lower.endswith(('.c', '.cc', '.cpp', '.cxx')) or lower.endswith('.java'):
+            if config.krn is None:
+                return '当前宿主机模式不能直接运行 FSOS C/Java 模块: ' + name
+            try:
+                config.krn.run('run ' + name)
+                return ''
+            except Exception as e:
+                return '程序启动失败: ' + str(e)
+
+        return '无法识别的可执行类型: ' + name + ' (支持 .py/.sh/.bash/.cmd/.bat/.elf/.c/.cpp/.java)'
+
     def run(self, args):
         parts = (args or '').split()
         if not parts:
-            return '用法: run <包名>'
+            return '用法: run <包名|文件>'
         name = parts[0]
+
+        # 兼容原有包管理语义：run hello 仍然优先运行已安装的 hello 入口。
         src = app_source(self.fs, name)
-        if src is None:
-            return '应用未安装或没有入口: ' + name
-        ns = {}
-        if config.krn is not None:
-            ns['krn'] = config.krn
-        try:
-            exec(src, ns)
-        except Exception as e:
-            return '运行失败: ' + str(e)
-        return ''
+        if src is not None:
+            ns = {'__name__': '__main__', '__file__': name}
+            if config.krn is not None:
+                ns['krn'] = config.krn
+            try:
+                exec(src, ns)
+            except SystemExit:
+                return ''
+            except Exception as e:
+                return '应用运行失败 [%s]: %s' % (name, str(e))
+            return '应用执行完成: ' + name
+
+        return self._run_direct_file(name)

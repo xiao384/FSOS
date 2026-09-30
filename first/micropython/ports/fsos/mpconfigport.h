@@ -57,8 +57,9 @@ typedef long long mp_off_t;   // MinGW64 下 long 仅 32 位, 文件偏移用 64
 // 不使用冻结 .mpy 模块 (我们用 mp_exec_str 直接执行内嵌源码)
 #define MICROPY_MODULE_FROZEN_MPY (0)
 
-// 内核没有文件系统, 禁用外部 import
-#define MICROPY_ENABLE_EXTERNAL_IMPORT (0)
+// FSOS 有自己的扁平文件区，并在 mp_entry.c 实现 mp_import_stat /
+// mp_lexer_new_from_file；开启外部 import 后，多文件 Python 应用可使用 import。
+#define MICROPY_ENABLE_EXTERNAL_IMPORT (1)
 
 // 路径/解析节点相关
 #define MICROPY_ALLOC_PATH_MAX (256)

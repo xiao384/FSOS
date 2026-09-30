@@ -181,6 +181,65 @@ int fs_write_in(uint32_t dir_lba, const char* name, const char* data) {
     return 0;
 }
 
+int fs_read_bin(const char* name, char* buf, int cap) {
+    return fs_read_bin_in(FS_DIR_LBA, name, buf, cap);
+}
+int fs_read_bin_in(uint32_t dir_lba, const char* name, char* buf, int cap) {
+    if (!buf || cap <= 0) return -1;
+    load_dir_buf(dir_lba, g_tbuf);
+    fs_entry_t* e = find_in((fs_entry_t*)g_tbuf, name);
+    if (!e || e->type == FS_TYPE_DIR) return -1;
+    fs_zero(g_io, FS_MAX_SIZE);
+    if (ata_read_sectors(e->lba, (uint8_t)e->nsec, g_io) != 0) return -2;
+    uint32_t len = (uint32_t)g_io[0] | ((uint32_t)g_io[1] << 8) |
+                   ((uint32_t)g_io[2] << 16) | ((uint32_t)g_io[3] << 24);
+    if (len == 0) len = (uint32_t)e->nsec * 512 - 4;   // 兼容旧文本文件 (无长度前缀)
+    if (len > (uint32_t)cap - 1) len = (uint32_t)cap - 1;
+    if (len > FS_MAX_SIZE - 4) len = FS_MAX_SIZE - 4;
+    for (uint32_t i = 0; i < len; i++) buf[i] = (char)g_io[4 + i];
+    buf[len] = 0;
+    return (int)len;
+}
+
+int fs_write_bin(const char* name, const char* data, int len) {
+    return fs_write_bin_in(FS_DIR_LBA, name, data, len);
+}
+int fs_write_bin_in(uint32_t dir_lba, const char* name, const char* data, int len) {
+    if (!name || !name[0] || !data || len < 0) return -1;
+    if (len > FS_MAX_SIZE - 4) len = FS_MAX_SIZE - 4;
+    load_dir_buf(dir_lba, g_tbuf);
+    fs_entry_t* d = (fs_entry_t*)g_tbuf;
+    fs_entry_t* e = find_in(d, name);
+    if (!e) {
+        for (int i = 0; i < FS_MAX_FILES; i++)
+            if (!d[i].used) { e = &d[i]; break; }
+        if (!e) return -3;                                // 目录项已满
+        fs_ncpy(e->name, name, FS_NAME_SZ);
+        uint32_t lba = fs_alloc_lba(FS_FILE_SECS);
+        if (lba == 0) return -4;                          // 数据区满
+        e->lba = lba;
+        e->nsec = 0;
+        e->type = FS_TYPE_FILE;
+        e->used = 1;
+    } else if (e->type == FS_TYPE_DIR) {
+        return -1;                                         // 同名目录, 拒绝覆盖
+    }
+    int nsec = (len + 4 + 511) / 512;
+    if (nsec < 1) nsec = 1;
+    if (nsec > FS_FILE_SECS) nsec = FS_FILE_SECS;
+    fs_zero(g_io, FS_MAX_SIZE);
+    g_io[0] = (uint8_t)(len & 0xFF);
+    g_io[1] = (uint8_t)((len >> 8) & 0xFF);
+    g_io[2] = (uint8_t)((len >> 16) & 0xFF);
+    g_io[3] = (uint8_t)((len >> 24) & 0xFF);
+    for (int i = 0; i < len; i++) g_io[4 + i] = (uint8_t)data[i];
+    if (ata_write_sectors(e->lba, (uint8_t)nsec, g_io) != 0) return -2;
+    e->nsec = (uint16_t)nsec;
+    ata_write_sectors(dir_lba, FS_DIR_SECS, g_tbuf);
+    if (dir_lba == FS_DIR_LBA) g_dir_loaded = 0;   // 使根缓存失效, 下次读取重新载入
+    return 0;
+}
+
 int fs_remove(const char* name) { return fs_remove_in(FS_DIR_LBA, name); }
 int fs_remove_in(uint32_t dir_lba, const char* name) {
     load_dir_buf(dir_lba, g_tbuf);

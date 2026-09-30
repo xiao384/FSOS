@@ -12,7 +12,7 @@
 #include <stddef.h>          // size_t (malloc 字段签名用)
 
 #define MOD_MAGIC  0x4F534D31ULL   // 'OSM1'
-#define MOD_ABI_VERSION 1          // mod_header_t.version 当前版本
+#define MOD_ABI_VERSION 2          // mod_header_t.version 当前版本
 #define MOD_HDRSZ  32              // mod_header_t 字节数 (32 字节, 8 字节对齐)
 
 struct mod_syscalls;              // 前向声明 (mod_entry_t 用到, 定义见下方)
@@ -53,6 +53,7 @@ typedef struct mod_syscalls {
     int   (*file_exists)(const char* name);
     void  (*log)(const char* s);                 // 调试日志 (串口)
     uint64_t (*tick_ms)(void);                   // 毫秒计数
+    int   (*poll)(void);                         // 执行期间的取消/超时检查；<0=终止
 } mod_syscalls_t;
 
 #endif // MOD_ABI_H

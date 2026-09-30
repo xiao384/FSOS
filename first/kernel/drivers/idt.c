@@ -1,7 +1,7 @@
 // idt.c - IDT / PIC / PIT 实现 (32/64 位通用, 64 位下用 16 字节门)
 #include "idt.h"
 #include "io.h"
-#include "gfx.h"    // gfx_gop_present(): UEFI 下把 mode13h 前端镜像到 GOP fb
+#include "gfx.h"    // gfx_gop_present(): legacy mode13h compatibility presenter
 #include "sched.h"  // 阶段 2: 时钟中断驱动调度
 #include <stdint.h>
 

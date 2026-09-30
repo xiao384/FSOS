@@ -21,8 +21,8 @@ QMP_PORT = 4444
 
 SECTOR = 512
 DISK_SECTORS = 4096
-LBA_USER_SB  = 3800
-LBA_SYSCONF  = 3960
+LBA_USER_SB  = 6000
+LBA_SYSCONF  = 6020
 MARKER_LBA   = DISK_SECTORS - 1  # 4095
 
 def log(msg):
@@ -195,9 +195,9 @@ def inspect_disk():
     boot_sig = data[510:512]
     log(f"boot sector signature: {boot_sig.hex()} (expect 55aa)")
 
-    # 用户库超级块 "USR1" @ LBA 3800
+    # 用户库超级块 "USR1" @ LBA_USER_SB
     sb = data[LBA_USER_SB*SECTOR: LBA_USER_SB*SECTOR+8]
-    log(f"user superblock @3800: {sb[:4]} (expect USR1)  count={sb[4]}")
+    log(f"user superblock @{LBA_USER_SB}: {sb[:4]} (expect USR1)  count={sb[4]}")
 
     # 记录 0 = root
     rec0 = data[LBA_USER_REC*SECTOR: LBA_USER_REC*SECTOR+32]
@@ -206,10 +206,10 @@ def inspect_disk():
     name = rec0[2:17].split(b"\x00")[0].decode("latin1", "ignore")
     log(f"rec[0]: magic={hex(magic)} role={role} name={name!r} (expect root/role2)")
 
-    # sysconf 主机名 @ LBA 3960 + 8
+    # sysconf 主机名 @ LBA_SYSCONF + 8
     host = data[LBA_SYSCONF*SECTOR+8: LBA_SYSCONF*SECTOR+8+15]
     host = host.split(b"\x00")[0].decode("latin1", "ignore")
-    log(f"sysconf hostname @3960+8: {host!r} (expect fsos)")
+    log(f"sysconf hostname @{LBA_SYSCONF}+8: {host!r} (expect fsos)")
 
     # 标记
     marker = data[MARKER_LBA*SECTOR:MARKER_LBA*SECTOR+4]

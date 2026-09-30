@@ -11,7 +11,7 @@
 #      便于宿主机侧或后续从外部导入的包。
 #
 # 索引 INDEX.TXT: 每行 "包名|入口文件|文件1,文件2,...", 记录"已安装"。
-#   内核的 krn 没有列目录接口, 这个索引同时充当 pt 侧的文件清单。
+#   Better Terminal 通过 krn.list_files() 获取真实文件区清单；INDEX.TXT 只负责记录包元数据。
 #
 # 内核限制 (来自 krn_bridge.c 的文件区): 单文件 4KB、最多 16 个文件、
 #   文件名 24 字符、内容以首个 NUL 结尾 (因此只能存文本)。
@@ -132,6 +132,18 @@ def store_package(fs, base, raw):
         raise ValueError('包过大, 分块数超过 99')
     for idx in range(len(chunks)):
         fs.write(chunk_name(base, idx), chunks[idx])
+    # 覆盖较小的新包时，删除旧包遗留的高编号分块；否则 load_chunks()
+    # 会把旧尾巴也拼进去，导致解码失败或加载到错误内容。
+    idx = len(chunks)
+    while idx < 100:
+        old_name = chunk_name(base, idx)
+        try:
+            if not fs.exists(old_name):
+                break
+            fs.delete(old_name)
+        except Exception:
+            break
+        idx += 1
     return len(chunks)
 
 

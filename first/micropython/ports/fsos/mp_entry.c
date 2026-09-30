@@ -15,6 +15,10 @@
 
 #include "vga.h"
 #include "mp_entry.h"
+#include "filesys.h"
+
+// T4.1: HAL 缓冲输出开关 (mphalport.c)
+extern void mp_hal_set_buffered(int on);
 
 // 内嵌的 "Better terminal" Python 源码 (由 gen_frozen_fsos.c 提供)
 extern const char bt_py_source[];
@@ -77,7 +81,9 @@ static void fsos_repl(void) {
 // 在模拟 CPU 上表现为"打开终端黑屏卡一下"。现改为: 运行时与编译好的字节码只创建一次,
 // 之后重复打开终端直接复用已编译代码, 卡顿只会在首次(且带 Loading 提示)出现一次。
 static int      g_mp_ready = 0;
-static mp_obj_t g_bt_fun   = NULL;
+
+static mp_obj_t g_bt_fun = NULL;
+#define G_BT_FUN g_bt_fun
 
 // 把内嵌 Better terminal 源码编译成字节码 (仅首次). 失败返回 NULL, 由调用方回退打印错误.
 static mp_obj_t compile_bt_once(void) {
@@ -105,13 +111,13 @@ static mp_obj_t compile_bt_once(void) {
 static void run_bt(void) {
     nlr_buf_t nlr;
     if (nlr_push(&nlr) == 0) {
-        if (!g_bt_fun) {
+        if (!G_BT_FUN) {
             // 仅在真正需要编译时显示提示, 避免大段源码编译期间黑屏被误认成"卡死"
             vga_clear(COL_BLACK);
             vga_draw_text_center(96, "Loading terminal...", COL_LGRAY, COL_BLACK);
-            g_bt_fun = compile_bt_once();
+            G_BT_FUN = compile_bt_once();
         }
-        if (g_bt_fun) mp_call_function_0(g_bt_fun);
+        if (G_BT_FUN) mp_call_function_0(G_BT_FUN);
         nlr_pop();
     } else {
         mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
@@ -128,6 +134,9 @@ void gc_collect(void) {
     // 因此 gc_mark_subtree 会安全忽略它们; 若真要精确, 可在此过滤范围。
     void *dummy;
     gc_collect_start();
+    // Better Terminal 的已编译函数对象位于 GC 堆，但由 C 全局变量持有；
+    // 全局变量不在 MicroPython 栈扫描范围内，因此显式注册为 GC root。
+    gc_collect_root(&g_bt_fun, 1);
     // 用 uintptr_t 计算栈范围 (64 位下 uint32_t 会截断指针)
     gc_collect_root(&dummy, ((uintptr_t)stack_top - (uintptr_t)&dummy) / sizeof(uintptr_t));
     gc_collect_end();
@@ -135,10 +144,28 @@ void gc_collect(void) {
 #endif
 
 mp_lexer_t *mp_lexer_new_from_file(qstr filename) {
-    mp_raise_OSError(MP_ENOENT);
+    const char *path = qstr_str(filename);
+    char *buf = m_malloc(FS_MAX_SIZE + 1);
+    if (!buf) mp_raise_OSError(MP_ENOMEM);
+    int n = fs_read(path, buf, FS_MAX_SIZE + 1);
+    if (n < 0 && path[0] == '.' && path[1] == '/') {
+        m_free(buf);
+        path += 2;
+        buf = m_malloc(FS_MAX_SIZE + 1);
+        if (!buf) mp_raise_OSError(MP_ENOMEM);
+        n = fs_read(path, buf, FS_MAX_SIZE + 1);
+    }
+    if (n < 0) {
+        m_free(buf);
+        mp_raise_OSError(MP_ENOENT);
+    }
+    return mp_lexer_new_from_str_len(filename, buf, (size_t)n, FS_MAX_SIZE + 1);
 }
 
 mp_import_stat_t mp_import_stat(const char *path) {
+    if (fs_size(path) >= 0) return MP_IMPORT_STAT_FILE;
+    if (path[0] == '.' && path[1] == '/' && fs_size(path + 2) >= 0)
+        return MP_IMPORT_STAT_FILE;
     return MP_IMPORT_STAT_NO_EXIST;
 }
 
@@ -164,24 +191,27 @@ int mp_available(void) {
     return 1;
 }
 
-// 执行一段 Python 源码 (桌面"开发"应用运行 .py 文件时调用)。
-// 与 REPL 的区别: 执行完源码即返回, 并等待一次按键让用户看到输出。
+// 执行一段 Python 源码（桌面“开发”应用运行 .py 文件时调用）。
+// 与 REPL 的区别：执行完源码立即返回；stdout 同时进入 FSOS console buffer，
+// 由 DevStudio/Terminal 的输出面板显示，绝不清屏，也不等待“Press any key”。
 int mp_fsos_run_str(const char *src) {
     if (!src) return -1;
     if (!g_mp_ready) {
-        vga_clear(COL_BLACK);
+        nlr_buf_t nlr;
         mp_hal_console_reset();
-        gc_init(MP_HEAP_START, (char *)MP_HEAP_START + MP_HEAP_SIZE);
-        mp_init();
-        g_mp_ready = 1;
+        if (nlr_push(&nlr) == 0) {
+            gc_init(MP_HEAP_START, (char *)MP_HEAP_START + MP_HEAP_SIZE);
+            mp_init();
+            g_mp_ready = 1;
+            nlr_pop();
+        } else {
+            mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+            return -1;
+        }
     } else {
-        vga_clear(COL_BLACK);
         mp_hal_console_reset();
     }
     do_str(src, MP_PARSE_FILE_INPUT);
-    vga_draw_text_center(180, "Press any key to return to desktop", COL_LGRAY, COL_BLACK);
-    extern int kb_wait(void);
-    kb_wait();
     return 0;
 }
 
@@ -197,7 +227,7 @@ int mp_fsos_run_str(const char *src) {
 static int g_bt_tried = 0;   // 预编译尝试过(含失败): 桌面期避免每帧重复编译风暴
 
 void mp_fsos_prefetch(void) {
-    if (g_bt_fun || g_bt_tried) return;         // 已编译或已尝试过(失败), 直接返回
+    if (G_BT_FUN || g_bt_tried) return;         // 已编译或已尝试过(失败), 直接返回
     g_bt_tried = 1;
 
     // 首帧之前的等待提示, 避免黑屏被误认为显示异常
@@ -218,42 +248,75 @@ void mp_fsos_prefetch(void) {
             return;
         }
     }
-    g_bt_fun = compile_bt_once();               // 编译失败返回 NULL, 打开终端时回退到带提示的现场编译
+    G_BT_FUN = compile_bt_once();               // 编译失败返回 NULL, 打开终端时回退到带提示的现场编译
 }
 
 // 运行时入口: mode = MP_MODE_REPL 或 MP_MODE_BT
 // 返回 1 = 已正常运行; 返回 0 = 该模式未能启动 (BT 编译失败等), 调用方回退。
 int mp_fsos_run(int mode) {
     if (!g_mp_ready) {
-        // 首次进入: 初始化运行时 (仅一次)。清屏后由 run_bt 在真正编译前显示
-        // "Loading terminal..." 提示, 避免大段源码编译期间黑屏被误认成"卡死"。
-        vga_clear(COL_BLACK);
+        // 首次进入: 初始化运行时 (仅一次)。初始化失败时回退到 C 终端，
+        // 不允许 MicroPython 的异常直接击穿内核。
+        nlr_buf_t nlr;
+
         mp_hal_console_reset();
-        gc_init(MP_HEAP_START, (char *)MP_HEAP_START + MP_HEAP_SIZE);
-        mp_init();
-        g_mp_ready = 1;
+        if (nlr_push(&nlr) == 0) {
+            gc_init(MP_HEAP_START, (char *)MP_HEAP_START + MP_HEAP_SIZE);
+            mp_init();
+            g_mp_ready = 1;
+            nlr_pop();
+        } else {
+            mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+            return 0;
+        }
     } else {
         mp_hal_console_reset();
     }
 
     if (mode == MP_MODE_BT) {
-        // run_bt 在编译失败时不会调用 g_bt_fun; 返回是否真正进入了 BT。
-        int ok = g_bt_fun ? 1 : 0;
+        // run_bt 在编译失败时不会调用 G_BT_FUN; 返回是否真正进入了 BT。
+        int ok = G_BT_FUN ? 1 : 0;
         run_bt();
-        return g_bt_fun ? 1 : 0;
+        return G_BT_FUN ? 1 : 0;
     } else {
 #if MICROPY_ENABLE_COMPILER
-        // 自检: 先执行一段 Python 代码, 快速验证编译器/运行时链路
-        do_str("print(1)\n", MP_PARSE_FILE_INPUT);
-        fsos_repl();
+        // T4.1: REPL 已移至 mp_fsos_run_buffered, 不再清屏/直写全屏文本
         return 1;
 #else
         run_bt();
-        return g_bt_fun ? 1 : 0;
+        return G_BT_FUN ? 1 : 0;
 #endif
     }
 
     // 不再调用 mp_deinit(): 保留 MicroPython 运行时与已编译字节码,
     // 使后续重复打开终端无需重新初始化/编译, 彻底消除"每次开终端卡一下"。
     // (MP 堆为专用 8MB, 不会被内核其它部分复用, 常驻安全)
+}
+// T4.1: 缓冲式交互 REPL — stdout 经 console_emit 进入环形缓冲 (module.c),
+// 由终端/DevStudio 输出面板 console_drain 回填, 不直写 VGA 全屏文本。
+int mp_fsos_run_buffered(void) {
+    if (!g_mp_ready) {
+        nlr_buf_t nlr;
+        mp_hal_console_reset();
+        if (nlr_push(&nlr) == 0) {
+            gc_init(MP_HEAP_START, (char *)MP_HEAP_START + MP_HEAP_SIZE);
+            mp_init();
+            g_mp_ready = 1;
+            nlr_pop();
+        } else {
+            mp_obj_print_exception(&mp_plat_print, (mp_obj_t)nlr.ret_val);
+            return 0;
+        }
+    } else {
+        mp_hal_console_reset();
+    }
+#if MICROPY_ENABLE_COMPILER
+    mp_hal_set_buffered(1);
+    fsos_repl();
+    mp_hal_set_buffered(0);
+    return 1;
+#else
+    run_bt();
+    return G_BT_FUN ? 1 : 0;
+#endif
 }

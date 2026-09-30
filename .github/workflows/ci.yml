@@ -1,0 +1,88 @@
+name: FSOS CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    name: Build & Verify (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm gcc g++ qemu-system-x86
+
+      - name: Install toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install nasm qemu
+          # macOS 使用 clang; gcc 可能指向 clang, 确保有 C 编译器
+          which gcc || brew install gcc
+
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # NASM
+          choco install nasm -y --no-progress
+          # QEMU
+          choco install qemu -y --no-progress
+          # MinGW (GCC) - GitHub Actions Windows runner 可能已有, 但确保
+          choco install mingw -y --no-progress
+          # 刷新 PATH
+          echo "C:\Program Files\NASM" >> $env:GITHUB_PATH
+          echo "C:\Program Files\qemu" >> $env:GITHUB_PATH
+          echo "C:\ProgramData\mingw64\bin" >> $env:GITHUB_PATH
+
+      - name: Check environment
+        working-directory: first
+        run: python tools/fsos.py checkenv
+
+      - name: Build kernel
+        working-directory: first
+        run: python tools/fsos.py build
+
+      - name: Verify boot (sentinel)
+        working-directory: first
+        run: python tools/fsos.py verify --timeout 30 --no-gdb
+
+      - name: Pack ISO
+        working-directory: first
+        run: python tools/fsos.py pack --iso
+
+  unit-tests:
+    name: Unit Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run unit tests
+        working-directory: first/tools/tests
+        run: python -m pytest -v

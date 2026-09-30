@@ -32,4 +32,7 @@ int icon_draw_builtin(int id, int x, int y);
 // 便捷: 先试磁盘加载 (name), 失败回退内嵌 (id)。
 int icon_draw_auto(const char* name, int id, int x, int y);
 
+// 统一图标模板渲染 (modern_ui): 26x20 圆角卡片 + 内容图形, AA/混色双模式分派.
+void icon_render(int kind, int x, int y);
+
 #endif // ICON_H

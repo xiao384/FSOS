@@ -78,8 +78,8 @@ def guid_bytes(d1, d2, d3, d4):
 # 破坏磁盘上的 KERNEL.BIN, 下次按文件名引导读到损坏内核。故必须在写文件前
 # 把这些簇标为坏簇, 让 pyfatfs 分配器跳过 (PyFat.allocate_bytes 会跳过
 # BAD_CLUSTER)。
-PERSIST_LBA_START = 3800          # 与 layout.h LBA_USER_SB 一致
-PERSIST_LBA_END   = 6039          # 内核持久化区 + FS 数据区末尾 (4000+2048-1, 与 FS_DATA_SECS 一致)
+PERSIST_LBA_START = 6000          # 与 layout.h LBA_USER_SB 一致
+PERSIST_LBA_END   = 8107          # 内核持久化区 + FS 数据区末尾 (6060+2048-1, 与 FS_DATA_SECS 一致)
 
 def reserve_persistence_clusters(tmp_img):
     """把全局磁盘 LBA 3800..4095 对应的 ESP 数据簇在 FAT 表 (两副本) 中直接

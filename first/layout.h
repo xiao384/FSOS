@@ -16,11 +16,11 @@
 //   LBA 0           引导扇区
 //   LBA 1..8        二级引导 loader
 //   LBA 9 ..       内核镜像 (最多 KERNEL_MAX_SECTORS 个扇区)
-//   LBA 3800       用户库超级块
-//   LBA 3801       用户库记录
-//   LBA 3810       Python krn 文件系统目录
-//   LBA 4000       krn 文件系统数据 (FS_DATA_SECS=2048 扇区 = 64 文件 x 32 扇区, 位于 SYSCONF 与模块间空闲区)
-//   LBA 3960       系统配置区 (root 可修改: 主题/配色/启动项等)
+//   LBA 6000       用户库超级块
+//   LBA 6001       用户库记录
+//   LBA 6040       Python krn 文件系统目录
+//   LBA 6060       krn 文件系统数据 (FS_DATA_SECS=2048 扇区 = 64 文件 x 32 扇区, 位于 SYSCONF 与模块间空闲区)
+//   LBA 6020       系统配置区 (root 可修改: 主题/配色/启动项等)
 //
 #ifndef LAYOUT_H
 #define LAYOUT_H
@@ -33,12 +33,12 @@
 #define LBA_LOADER          1
 #define LBA_KERNEL          9
 
-// ---- 内核之后的数据区 ----
-#define LBA_USER_SB         3800        // 用户库超级块
-#define LBA_USER_REC        3801        // 用户库记录 (UserRec[16])
-#define LBA_FS_DIR          3810        // krn 文件系统目录 (FS_DIR_SECS 扇区, 见 filesys.h)
-#define LBA_FS_DATA         4000        // krn 文件系统数据 (FS_DATA_SECS 扇区, 位于 SYSCONF 与模块间空闲区)
-#define LBA_SYSCONF         3960        // 系统配置区 (4 扇区)
+// ---- 内核之后的数据区 (随内核镜像增大从 3800 迁移到 6000 起) ----
+#define LBA_USER_SB         6000        // 用户库超级块
+#define LBA_USER_REC        6001        // 用户库记录 (UserRec[16])
+#define LBA_FS_DIR          6040        // krn 文件系统目录 (FS_DIR_SECS 扇区, 见 filesys.h)
+#define LBA_SYSCONF         6020        // 系统配置区 (4 扇区)
+#define LBA_FS_DATA         6060        // krn 文件系统数据 (FS_DATA_SECS 扇区, 位于 SYSCONF 与模块间空闲区)
 
 // ---- 解释器模块 (按需从磁盘读入预留高地址窗口, 运行完即释放) ----
 // 必须与 first/user/module.h 的 MOD_*_VA/MOD_SECTORS 及 first/tools/make_uefi_disk.py

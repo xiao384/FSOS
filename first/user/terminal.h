@@ -6,6 +6,15 @@
 // 无论登录用户角色如何, 终端会话始终以 root 最高权限执行
 void terminal_run(void);
 
+// 原生窗口终端：由 Window Manager 驱动，不再阻塞桌面主循环。
+// open/draw/key/mouse 分离后，终端成为普通 app_t，可关闭、最小化、切换焦点。
+void terminal_open(void);
+void terminal_draw(int x, int y, int w, int h);
+int  terminal_key(int k);
+int  terminal_on_mouse(int x, int y, int ldown);
+int  terminal_on_tick(void);
+void terminal_close(void);
+
 // 执行一条命令 (供 krn.run() 等复用), 等价于终端输入该行
 void run_command(const char* line);
 

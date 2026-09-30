@@ -27,7 +27,9 @@ int mod_load_run(const char* which, const char* src, const char* proc_name);
 
 // 控制台输出 (供模块 syscall 调用): 写入串口镜像 + 滚动缓冲 (GUI 终端窗口后续渲染)
 void console_emit(char c);
-// 取滚动缓冲最近 len 字节 (供 GUI 终端窗口渲染), 返回拷贝长度
+// 清空模块/解释器输出缓冲（一次程序运行前调用）
+void console_clear(void);
+// 取滚动缓冲最近 len 字节 (供 GUI 终端窗口/IDE 输出面板渲染), 返回拷贝长度
 int  console_drain(char* dst, int len);
 
 #endif // MODULE_H

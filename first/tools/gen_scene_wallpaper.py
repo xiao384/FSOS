@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""Synthesize a mountain-lake dusk wallpaper and emit the FSOS RGB565 resource.
+
+Replaces the Aurora wallpaper (user/aurora_wallpaper_full.h) with a procedural
+scene: gradient dusk sky, a setting sun with glow, layered mountain ridges,
+and a reflected lake. Output matches the exact header format the desktop uses
+(static const uint16_t aurora_wallpaper_full[W*H], RGB565, 16 per line).
+
+The 320x200 8bpp fallback (aurora_wallpaper.h) is generated too for consistency
+even though the LFB desktop path no longer consumes it.
+"""
+import math
+
+# ---- target resolutions -----------------------------------------------------
+FULL_W, FULL_H = 960, 540
+SMALL_W, SMALL_H = 320, 200
+
+# module globals used by the scene functions (set per resolution)
+W = FULL_W
+H = FULL_H
+HORIZON = int(H * 0.56)
+SUN_X = W * 0.62
+SUN_Y = HORIZON - H * 0.10
+SUN_R = H * 0.085
+
+
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def clamp(v, lo, hi):
+    return lo if v < lo else hi if v > hi else v
+
+
+def hash1(n):
+    n = int(n)
+    n = (n ^ 61) ^ (n >> 16)
+    n = n + (n << 3)
+    n = n ^ (n >> 4)
+    n = (n * 0x27D4EB2D) & 0xFFFFFFFF
+    n = n ^ (n >> 15)
+    return ((n >> 8) & 0xFFFF) / 65535.0 - 0.5
+
+
+SKY_TOP = (24, 26, 64)
+SKY_MID = (72, 52, 122)
+SKY_HOR = (250, 158, 92)
+
+
+def sky_color(x, y):
+    t = y / HORIZON
+    if t < 0.55:
+        tt = t / 0.55
+        r = lerp(SKY_TOP[0], SKY_MID[0], tt)
+        g = lerp(SKY_TOP[1], SKY_MID[1], tt)
+        b = lerp(SKY_TOP[2], SKY_MID[2], tt)
+    else:
+        tt = (t - 0.55) / 0.45
+        r = lerp(SKY_MID[0], SKY_HOR[0], tt)
+        g = lerp(SKY_MID[1], SKY_HOR[1], tt)
+        b = lerp(SKY_MID[2], SKY_HOR[2], tt)
+    dx = x - SUN_X
+    dy = y - SUN_Y
+    dist = math.hypot(dx, dy)
+    glow = max(0.0, 1.0 - dist / (SUN_R * 4.5))
+    glow *= glow
+    r = lerp(r, 255, glow * 0.9)
+    g = lerp(g, 222, glow * 0.9)
+    b = lerp(b, 172, glow * 0.7)
+    return (r, g, b)
+
+
+def ridge(layer, x):
+    base = (HORIZON - H * 0.06, HORIZON - H * 0.14, HORIZON - H * 0.24)[layer]
+    amp = (H * 0.05, H * 0.10, H * 0.16)[layer]
+    f1 = (0.006, 0.004, 0.003)[layer]
+    f2 = (0.017, 0.013, 0.009)[layer]
+    p1 = (0.0, 1.7, 3.1)[layer]
+    p2 = (2.0, 4.2, 0.7)[layer]
+    y = (base - amp * (0.5 + 0.5 * math.sin(x * f1 + p1)) * 0.6
+         - amp * 0.4 * math.sin(x * f2 + p2)
+         - amp * 0.25 * hash1(int(x * 0.05) + layer * 1000))
+    return y
+
+
+MTN_COLOR = ((60, 58, 96), (40, 40, 72), (22, 24, 46))
+
+
+def land_color(x, y):
+    for layer in (2, 1, 0):
+        ry = ridge(layer, x)
+        if y >= ry:
+            shade = clamp((ry - y) / (H * 0.12), 0, 1)
+            c = MTN_COLOR[layer]
+            edge = clamp(1.0 - (y - ry) / 6.0, 0, 1)
+            r = c[0] + (180 - c[0]) * edge * 0.5
+            g = c[1] + (170 - c[1]) * edge * 0.5
+            b = c[2] + (200 - c[2]) * edge * 0.5
+            r *= (1 - shade * 0.25)
+            g *= (1 - shade * 0.25)
+            b *= (1 - shade * 0.25)
+            return (r, g, b)
+    return None
+
+
+def scene(x, y):
+    lc = land_color(x, y)
+    if lc is not None:
+        return lc
+    c = sky_color(x, y)
+    if y < HORIZON * 0.4:
+        s = hash1(int(x * 1.3) + int(y * 2.7) * 999)
+        if s > 0.478:
+            b = 200 + int((s - 0.478) * 600)
+            c = (min(255, c[0] + b * 0.6), min(255, c[1] + b * 0.6), min(255, c[2] + b))
+    return c
+
+
+def lake_color(x, y):
+    d = y - HORIZON
+    y_ref = HORIZON - d
+    if y_ref < 0:
+        y_ref = 0
+    c = scene(x, y_ref)
+    r, g, b = c
+    rip = math.sin(y * 0.6 + math.sin(x * 0.04) * 2.0) * 8
+    r = clamp(r * 0.82 + rip, 0, 255)
+    g = clamp(g * 0.82 + rip, 0, 255)
+    b = clamp(b * 0.86 + rip, 0, 255)
+    dx = abs(x - SUN_X)
+    if dx < SUN_R * 1.4:
+        fade = max(0.0, 1 - d / (H - HORIZON))
+        refl = max(0.0, 1 - dx / (SUN_R * 1.4)) * fade
+        r = lerp(r, 255, refl * 0.5)
+        g = lerp(g, 225, refl * 0.5)
+        b = lerp(b, 170, refl * 0.4)
+    return (r, g, b)
+
+
+def pixel(x, y):
+    if y <= HORIZON:
+        col = scene(x, y)
+    else:
+        col = lake_color(x, y)
+    # thin bright waterline at the horizon
+    if abs(y - HORIZON) <= 1:
+        col = (min(255, col[0] + 40), min(255, col[1] + 40), min(255, col[2] + 50))
+    return col
+
+
+def render(w, h):
+    global W, H, HORIZON, SUN_X, SUN_Y, SUN_R
+    W, H = w, h
+    HORIZON = int(H * 0.56)
+    SUN_X = W * 0.62
+    SUN_Y = HORIZON - H * 0.10
+    SUN_R = H * 0.085
+    out = []
+    for y in range(h):
+        for x in range(w):
+            r, g, b = pixel(x, y)
+            r = int(clamp(r, 0, 255))
+            g = int(clamp(g, 0, 255))
+            b = int(clamp(b, 0, 255))
+            v = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)
+            out.append(v)
+    return out
+
+
+def emit_rgb565(path, w, h, data):
+    lines = []
+    for i in range(0, len(data), 16):
+        chunk = data[i:i + 16]
+        lines.append("    " + ", ".join("0x%04X" % v for v in chunk) + ",")
+    text = (
+        "// Generated by tools/gen_scene_wallpaper.py; do not edit manually.\n"
+        "#ifndef AURORA_WALLPAPER_FULL_H\n#define AURORA_WALLPAPER_FULL_H\n"
+        "#include <stdint.h>\n"
+        "#define AURORA_FULL_W %d\n#define AURORA_FULL_H %d\n"
+        "static const uint16_t aurora_wallpaper_full[AURORA_FULL_W*AURORA_FULL_H] = {\n"
+        % (w, h)
+    )
+    text += "\n".join(lines) + "\n};\n\n#endif // AURORA_WALLPAPER_FULL_H\n"
+    with open(path, "w", encoding="ascii") as f:
+        f.write(text)
+    print("wrote %s (%d KB, %dx%d)" % (path, len(text) // 1024, w, h))
+
+
+def emit_8bpp(path, w, h, data):
+    # downsample-free: quantize each channel to 5 levels (5*5*5=125 <= 128 colors)
+    pal = {}
+    idx = []
+    pixels = []
+    for v in data:
+        r = (v >> 11) & 0x1F
+        g = (v >> 5) & 0x3F
+        b = v & 0x1F
+        # map 5/6/5 -> 5 levels each
+        rq = min(4, r * 5 // 32)
+        gq = min(4, g * 5 // 64)
+        bq = min(4, b * 5 // 32)
+        key = (rq, gq, bq)
+        if key not in pal:
+            # expand back to 8-bit
+            rr = int(rq * 255 / 4)
+            gg = int(gq * 255 / 4)
+            bb = int(bq * 255 / 4)
+            pal[key] = len(pal)
+        pixels.append(pal[key])
+    npal = len(pal)
+    palette = [0] * (128 * 3)
+    for (rq, gq, bq), i in pal.items():
+        palette[i * 3 + 0] = int(rq * 255 / 4)
+        palette[i * 3 + 1] = int(gq * 255 / 4)
+        palette[i * 3 + 2] = int(bq * 255 / 4)
+    plines = []
+    for i in range(0, len(palette), 16):
+        plines.append("    " + ", ".join(str(v) for v in palette[i:i + 16]) + ",")
+    xlines = []
+    for i in range(0, len(pixels), 32):
+        xlines.append("    " + ", ".join(str(v) for v in pixels[i:i + 32]) + ",")
+    text = (
+        "// Generated by tools/gen_scene_wallpaper.py; do not edit manually.\n"
+        "#ifndef AURORA_WALLPAPER_RESOURCE_H\n#define AURORA_WALLPAPER_RESOURCE_H\n\n"
+        "#include <stdint.h>\n\n"
+        "#define AURORA_WALLPAPER_W %d\n"
+        "#define AURORA_WALLPAPER_HEIGHT %d\n"
+        "#define AURORA_WALLPAPER_COLORS 128\n\n"
+        "static const uint8_t aurora_wallpaper_palette[AURORA_WALLPAPER_COLORS * 3] = {\n"
+        % (w, h)
+    )
+    text += "\n".join(plines) + "\n};\n\n"
+    text += (
+        "static const uint8_t aurora_wallpaper_pixels[AURORA_WALLPAPER_W * AURORA_WALLPAPER_HEIGHT] = {\n"
+    )
+    text += "\n".join(xlines) + "\n};\n\n#endif // AURORA_WALLPAPER_RESOURCE_H\n"
+    with open(path, "w", encoding="ascii") as f:
+        f.write(text)
+    print("wrote %s (%d KB, %dx%d, %d colors)" % (path, len(text) // 1024, w, h, npal))
+
+
+def main():
+    import os
+    root = os.path.dirname(os.path.abspath(__file__))
+    user = os.path.normpath(os.path.join(root, "..", "user"))
+    full = render(FULL_W, FULL_H)
+    emit_rgb565(os.path.join(user, "aurora_wallpaper_full.h"), FULL_W, FULL_H, full)
+    small = render(SMALL_W, SMALL_H)
+    emit_8bpp(os.path.join(user, "aurora_wallpaper.h"), SMALL_W, SMALL_H, small)
+
+
+if __name__ == "__main__":
+    main()

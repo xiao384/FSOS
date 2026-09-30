@@ -36,3 +36,10 @@ int mp_fsos_run_str(const char* src) {
     kb_wait();
     return -1;
 }
+int mp_fsos_run_buffered(void) {
+    vga_draw_text(4, 80, "[python] MicroPython is not built into this kernel.",
+                  COL_LRED, COL_BLACK);
+    extern int kb_wait(void);
+    kb_wait();
+    return 0;
+}

@@ -30,7 +30,7 @@ _USAGE = {
     'auto-output': '用法: auto-output <1(文件内容) 或 2(手动输入)>',
     'unzip': '用法: unzip <包名> 或 unzip -l <包名>',
     'install': '用法: install <包名>',
-    'run': '用法: run <包名>',
+    'run': '用法: run <包名|文件>  (支持 .py/.sh/.bash/.cmd/.bat/.elf/.c/.cpp/.java)',
     'theme': '用法: theme <dark|light>',
 }
 

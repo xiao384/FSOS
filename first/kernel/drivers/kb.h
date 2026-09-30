@@ -16,6 +16,10 @@
 #define KEY_INS   0x1108
 #define KEY_DEL   0x1109
 
+// 鼠标滚轮伪键 (由 WM 将滚轮事件映射给可滚动应用)
+#define KEY_WHEEL_UP   0x1501
+#define KEY_WHEEL_DOWN 0x1502
+
 // 功能键 (扫描码集 1)
 #define KEY_F1   0x1301
 #define KEY_F2   0x1302
